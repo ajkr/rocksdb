@@ -12,13 +12,14 @@ namespace rocksdb {
 RangeDelAggregator::RangeDelAggregator(
     const InternalKeyComparator& icmp,
     const std::vector<SequenceNumber>& snapshots)
-    : upper_bound_(kMaxSequenceNumber), icmp_(icmp) {
+    : upper_bound_(kMaxSequenceNumber), icmp_(icmp),
+      tombstones_collapsed_(true) {
   InitRep(snapshots);
 }
 
 RangeDelAggregator::RangeDelAggregator(const InternalKeyComparator& icmp,
                                        SequenceNumber snapshot)
-    : upper_bound_(snapshot), icmp_(icmp) {}
+    : upper_bound_(snapshot), icmp_(icmp), tombstones_collapsed_(false) {}
 
 void RangeDelAggregator::InitRep(const std::vector<SequenceNumber>& snapshots) {
   assert(rep_ == nullptr);
@@ -50,19 +51,28 @@ bool RangeDelAggregator::ShouldDelete(const ParsedInternalKey& parsed) {
     return false;
   }
   const auto& tombstone_map = GetTombstoneMap(parsed.sequence);
-  for (const auto& start_key_and_tombstone : tombstone_map) {
-    const auto& tombstone = start_key_and_tombstone.second;
-    if (icmp_.user_comparator()->Compare(parsed.user_key,
-                                         tombstone.start_key_) < 0) {
-      break;
+  if (tombstones_collapsed_) {
+    auto iter = tombstone_map.upper_bound(parsed.user_key.ToString());
+    if (iter == tombstone_map.begin()) {
+      return false;
     }
-    if (parsed.sequence < tombstone.seq_ &&
-        icmp_.user_comparator()->Compare(parsed.user_key, tombstone.end_key_) <
-            0) {
-      return true;
+    --iter;
+    return parsed.sequence < iter->second.seq_;
+  } else {
+    for (const auto& start_key_and_tombstone : tombstone_map) {
+      const auto& tombstone = start_key_and_tombstone.second;
+      if (icmp_.user_comparator()->Compare(parsed.user_key,
+                                           tombstone.start_key_) < 0) {
+        break;
+      }
+      if (parsed.sequence < tombstone.seq_ &&
+          icmp_.user_comparator()->Compare(parsed.user_key,
+                                           tombstone.end_key_) <= 0) {
+        return true;
+      }
     }
+    return false;
   }
-  return false;
 }
 
 bool RangeDelAggregator::ShouldAddTombstones(
@@ -106,7 +116,107 @@ Status RangeDelAggregator::AddTombstones(
     }
     RangeTombstone tombstone(parsed_key, input->value());
     auto& tombstone_map = GetTombstoneMap(tombstone.seq_);
-    tombstone_map.emplace(input->key(), std::move(tombstone));
+    if (tombstones_collapsed_) {
+      // In collapsed mode, we only fill the seq_ field in the TombstoneMap's
+      // values. The end_key is unneeded because we assume the tombstone extends
+      // until the next tombstone starts. For gaps between real tombstones and
+      // for the last real tombstone, we denote end keys by inserting fake
+      // tombstones with sequence number zero.
+      TombstoneMap::iterator curr = tombstone_map.upper_bound(input->key());
+      SequenceNumber first_overlap_seq;
+      // Special-case the first element so the while-loop below can assume its
+      // tombstones all start after the new tombstone starts.
+      if (curr == tombstone_map.begin()) {
+        // This is the new leftmost tombstone, so forcibly add to map
+        first_overlap_seq = 0;
+      } else {
+        // An existing tombstone overlaps our start key, so add new one if its
+        // sequence number is higher
+        --curr;
+        first_overlap_seq = curr->second.seq_;
+        ++curr;
+      }
+      bool seen_overlap_above;
+      if (first_overlap_seq < tombstone.seq_) {
+        curr = tombstone_map.emplace_hint(curr, input->key(), RangeTombstone());
+        curr->second.seq_ = tombstone.seq_;
+        ++curr;
+        seen_overlap_above = false;
+      } else {
+        seen_overlap_above = true;
+      }
+      assert(curr == tombstone_map.end() ||
+             icmp_.user_comparator()->Compare(tombstone.start_key_,
+                                              curr->first) < 0);
+
+      SequenceNumber final_overlap_seq = first_overlap_seq;
+      if (curr != tombstone_map.end() &&
+          icmp_.user_comparator()->Compare(curr->first, tombstone.end_key_) <
+              0) {
+        // Delete swaths of existing tombstones that are either fully eclipsed
+        // by the new tombstone or are partially eclipsed from the left.
+        TombstoneMap::const_iterator del_begin_iter = tombstone_map.end();
+        bool last_iter = false;
+        do {
+          TombstoneMap::const_iterator lookahead = std::next(curr);
+          final_overlap_seq = curr->second.seq_;
+          bool prev_seen_overlap_above = seen_overlap_above;
+          if (tombstone.seq_ < curr->second.seq_) {
+            seen_overlap_above = true;
+          }
+          if (curr->second.seq_ < tombstone.seq_ &&
+              del_begin_iter == tombstone_map.end()) {
+            del_begin_iter = curr;
+          }
+          last_iter = lookahead == tombstone_map.end() ||
+                      icmp_.user_comparator()->Compare(tombstone.end_key_,
+                                                       lookahead->first) <= 0;
+          if (last_iter || tombstone.seq_ < lookahead->second.seq_) {
+            if (del_begin_iter != tombstone_map.end()) {
+              Slice del_start = del_begin_iter->first;
+              if (lookahead == tombstone_map.end()) {
+                tombstone_map.erase(del_begin_iter, lookahead);
+                curr = tombstone_map.end();
+              } else {
+                Slice lookup = lookahead->first;
+                tombstone_map.erase(del_begin_iter, lookahead);
+                curr = tombstone_map.find(lookup.ToString());
+              }
+              // the tombstone added before the while-loop is still open when
+              // !prev_seen_overlap_above, in which case we don't need to insert
+              // another tombstone with same seqnum
+              if (prev_seen_overlap_above) {
+                curr = tombstone_map.emplace_hint(
+                    curr, del_start.ToString(),
+                    RangeTombstone(Slice(), Slice(), tombstone.seq_));
+                assert(curr->second.seq_ == tombstone.seq_);
+                del_begin_iter = tombstone_map.end();
+                ++curr;
+              }
+            } else {
+              ++curr;
+            }
+          } else {
+            ++curr;
+          }
+        } while (!last_iter);
+      }
+      assert(curr == tombstone_map.end() ||
+             icmp_.user_comparator()->Compare(tombstone.end_key_,
+                                              curr->first) <= 0);
+      if ((curr == tombstone_map.end() ||
+           icmp_.user_comparator()->Compare(tombstone.end_key_, curr->first) <
+               0) &&
+          final_overlap_seq < tombstone.seq_) {
+        // Handle case where last overlapping tombstone was eclipsed not
+        // including its end key.
+        curr = tombstone_map.emplace_hint(
+            curr, tombstone.end_key_.ToString(),
+            RangeTombstone(Slice(), Slice(), final_overlap_seq));
+      }
+    } else {
+      tombstone_map.emplace(input->key(), std::move(tombstone));
+    }
     input->Next();
   }
   if (!first_iter) {

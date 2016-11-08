@@ -32,12 +32,10 @@ class RangeDelAggregator {
   //    stripes, which is the seqnum range between consecutive snapshots,
   //    including the higher snapshot and excluding the lower one. Currently,
   //    this is used by ShouldDelete() to prevent deletion of keys that are
-  //    covered by range tombstones in other snapshot stripes. In case of writes
-  //    (flush/compaction), all DB snapshots are provided such that no keys are
-  //    removed that are uncovered according to any DB snapshot. In case of read
-  //    (get/iterator), only the user snapshot is provided such that the seqnum
-  //    space is divided into two stripes, where only tombstones in the older
-  //    stripe are considered by ShouldDelete().
+  //    covered by range tombstones in other snapshot stripes. This constructor
+  //    is used for writes (flush/compaction). All DB snapshots are provided
+  //    such that no keys are removed that are uncovered according to any DB
+  //    snapshot.
   // Note this overload does not lazily initialize Rep.
   RangeDelAggregator(const InternalKeyComparator& icmp,
                      const std::vector<SequenceNumber>& snapshots);
@@ -45,7 +43,10 @@ class RangeDelAggregator {
   // @param upper_bound Similar to snapshots above, except with a single
   //    snapshot, which allows us to store the snapshot on the stack and defer
   //    initialization of heap-allocating members (in Rep) until the first range
-  //    deletion is encountered.
+  //    deletion is encountered. This constructor is used in case of reads (get/
+  //    iterator), for which only the user snapshot (upper_bound) is provided
+  //    such that the seqnum space is divided into two stripes. Only the older
+  //    stripe will be used by ShouldDelete().
   RangeDelAggregator(const InternalKeyComparator& icmp,
                      SequenceNumber upper_bound);
 
@@ -108,6 +109,7 @@ class RangeDelAggregator {
   SequenceNumber upper_bound_;
   std::unique_ptr<Rep> rep_;
   const InternalKeyComparator& icmp_;
+  const bool tombstones_collapsed_;
 };
 
 }  // namespace rocksdb
