@@ -294,8 +294,7 @@ TEST_F(DBCompactionTest, TestTableReaderForCompaction) {
       num_new_table_reader = 0;
       ASSERT_EQ(Key(k), Get(Key(k)));
       // lookup iterator from table cache and no need to create a new one.
-      // a second table cache iterator is created for range tombstones
-      ASSERT_EQ(num_table_cache_lookup, 2);
+      ASSERT_EQ(num_table_cache_lookup, 1);
       ASSERT_EQ(num_new_table_reader, 0);
     }
   }
