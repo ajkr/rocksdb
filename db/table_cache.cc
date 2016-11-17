@@ -175,9 +175,11 @@ InternalIterator* TableCache::NewIterator(
   PERF_TIMER_GUARD(new_table_iterator_nanos);
 
   Status s;
+  Cache::Handle* handle = nullptr;
   if (range_del_agg != nullptr && !options.ignore_range_deletions) {
     std::unique_ptr<InternalIterator> range_del_iter(NewRangeDeletionIterator(
-        options, icomparator, fd, file_read_hist, skip_filters, level));
+        options, icomparator, fd, file_read_hist, skip_filters, level,
+        &handle));
     s = range_del_iter->status();
     if (s.ok()) {
       s = range_del_agg->AddTombstones(std::move(range_del_iter));
@@ -186,7 +188,6 @@ InternalIterator* TableCache::NewIterator(
 
   bool create_new_table_reader = false;
   TableReader* table_reader = nullptr;
-  Cache::Handle* handle = nullptr;
   if (s.ok()) {
     if (table_reader_ptr != nullptr) {
       *table_reader_ptr = nullptr;
@@ -214,24 +215,26 @@ InternalIterator* TableCache::NewIterator(
     } else {
       table_reader = fd.table_reader;
       if (table_reader == nullptr) {
-        s = FindTable(env_options, icomparator, fd, &handle,
-                      options.read_tier == kBlockCacheTier /* no_io */,
-                      !for_compaction /* record read_stats */, file_read_hist,
-                      skip_filters, level);
+        if (handle == nullptr) {
+          s = FindTable(env_options, icomparator, fd, &handle,
+                        options.read_tier == kBlockCacheTier /* no_io */,
+                        !for_compaction /* record read_stats */, file_read_hist,
+                        skip_filters, level);
+        }
         if (s.ok()) {
           table_reader = GetTableReaderFromHandle(handle);
         }
       }
     }
   }
+  InternalIterator* result = nullptr;
   if (s.ok()) {
-    InternalIterator* result =
-        table_reader->NewIterator(options, arena, skip_filters);
+    result = table_reader->NewIterator(options, arena, skip_filters);
     if (create_new_table_reader) {
-      assert(handle == nullptr);
       result->RegisterCleanup(&DeleteTableReader, table_reader, nullptr);
     } else if (handle != nullptr) {
       result->RegisterCleanup(&UnrefEntry, cache_, handle);
+      handle = nullptr;  // prevent from releasing below
     }
 
     if (for_compaction) {
@@ -240,39 +243,38 @@ InternalIterator* TableCache::NewIterator(
     if (table_reader_ptr != nullptr) {
       *table_reader_ptr = table_reader;
     }
-    return result;
   }
   if (handle != nullptr) {
     ReleaseHandle(handle);
   }
-  return NewErrorInternalIterator(s);
+  if (!s.ok()) {
+    assert(result == nullptr);
+    result = NewErrorInternalIterator(s);
+  }
+  return result;
 }
 
 InternalIterator* TableCache::NewRangeDeletionIterator(
     const ReadOptions& options, const InternalKeyComparator& icmp,
     const FileDescriptor& fd, HistogramImpl* file_read_hist, bool skip_filters,
-    int level) {
+    int level, Cache::Handle** cache_handle) {
+  *cache_handle = nullptr;
   if (options.ignore_range_deletions) {
     return NewEmptyInternalIterator();
   }
   Status s;
   TableReader* table_reader = fd.table_reader;
-  Cache::Handle* cache_handle = nullptr;
   if (table_reader == nullptr) {
-    s = FindTable(env_options_, icmp, fd, &cache_handle,
+    s = FindTable(env_options_, icmp, fd, cache_handle,
                   options.read_tier == kBlockCacheTier /* no_io */,
                   true /* record_read_stats */, file_read_hist, skip_filters,
                   level);
     if (s.ok()) {
-      table_reader = GetTableReaderFromHandle(cache_handle);
+      table_reader = GetTableReaderFromHandle(*cache_handle);
     }
   }
   if (s.ok()) {
-    auto* result = table_reader->NewRangeTombstoneIterator(options);
-    if (cache_handle != nullptr) {
-      result->RegisterCleanup(&UnrefEntry, cache_, cache_handle);
-    }
-    return result;
+    return table_reader->NewRangeTombstoneIterator(options);
   }
   return NewErrorInternalIterator(s);
 }
@@ -283,10 +285,12 @@ Status TableCache::Get(const ReadOptions& options,
                        GetContext* get_context, HistogramImpl* file_read_hist,
                        bool skip_filters, int level) {
   Status s;
+  Cache::Handle* handle = nullptr;
   if (get_context->range_del_agg() != nullptr &&
       !options.ignore_range_deletions) {
     std::unique_ptr<InternalIterator> range_del_iter(NewRangeDeletionIterator(
-        options, internal_comparator, fd, file_read_hist, skip_filters, level));
+        options, internal_comparator, fd, file_read_hist, skip_filters, level,
+        &handle));
     s = range_del_iter->status();
     if (s.ok()) {
       s = get_context->range_del_agg()->AddTombstones(
@@ -294,8 +298,6 @@ Status TableCache::Get(const ReadOptions& options,
     }
   }
 
-  TableReader* t = fd.table_reader;
-  Cache::Handle* handle = nullptr;
   std::string* row_cache_entry = nullptr;
   bool done = false;
 #ifndef ROCKSDB_LITE
@@ -340,11 +342,14 @@ Status TableCache::Get(const ReadOptions& options,
   }
 #endif  // ROCKSDB_LITE
   if (!done && s.ok()) {
-    if (!t) {
-      s = FindTable(env_options_, internal_comparator, fd, &handle,
-                    options.read_tier == kBlockCacheTier /* no_io */,
-                    true /* record_read_stats */, file_read_hist, skip_filters,
-                    level);
+    TableReader* t = fd.table_reader;
+    if (t == nullptr) {
+      if (handle == nullptr) {
+        s = FindTable(env_options_, internal_comparator, fd, &handle,
+                      options.read_tier == kBlockCacheTier /* no_io */,
+                      true /* record_read_stats */, file_read_hist, skip_filters,
+                      level);
+      }
       if (s.ok()) {
         t = GetTableReaderFromHandle(handle);
       }
