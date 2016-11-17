@@ -62,11 +62,15 @@ class TableCache {
   // file number.
   // @param skip_filters Disables loading/accessing the filter block
   // @param level The level this table is at, -1 for "not set / don't know"
+  // @param handle If this function incurs a cache lookup to get its reader,
+  //    stores a reference to the reader's cache entry in "*handle". Note the
+  //    caller is responsible for releasing "*handle" when non-nullptr.
   InternalIterator* NewRangeDeletionIterator(const ReadOptions& options,
                                              const InternalKeyComparator& icmp,
                                              const FileDescriptor& fd,
                                              HistogramImpl* file_read_hist,
-                                             bool skip_filters, int level);
+                                             bool skip_filters, int level,
+                                             Cache::Handle** handle);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call (*handle_result)(arg, found_key, found_value) repeatedly until
