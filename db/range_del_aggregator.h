@@ -86,10 +86,13 @@ class RangeDelAggregator {
   // their seqnums are greater than the next smaller snapshot's seqnum.
   typedef std::map<SequenceNumber, TombstoneMap> StripeMap;
 
+  // Initializes stripe map lazily since it's expensive
+  void InitStripeMap();
   Status AddTombstones(InternalIterator* input, bool arena);
   TombstoneMap& GetTombstoneMap(SequenceNumber seq);
 
-  StripeMap stripe_map_;
+  const std::vector<SequenceNumber> snapshots_;
+  std::unique_ptr<StripeMap> stripe_map_;
   const InternalKeyComparator icmp_;
   Arena arena_;  // must be destroyed after pinned_iters_mgr_ which references
                  // memory in this arena
