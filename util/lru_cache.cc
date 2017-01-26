@@ -364,7 +364,8 @@ Status LRUCacheShard::Insert(const Slice& key, uint32_t hash, void* value,
       usage_ += e->charge;
       if (old != nullptr) {
         old->SetInCache(false);
-        if (Unref(old)) {
+        if (old->refs == 1) {
+          Unref(old);
           usage_ -= old->charge;
           // old is on LRU because it's in cache and its reference count
           // was just 1 (Unref returned 0)
