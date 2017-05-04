@@ -150,8 +150,7 @@ int PhysicalCoreID() {
   int cpuno = sched_getcpu();
   if (cpuno < 0) {
     return -1;
-  }
-  else {
+  } else {
     return cpuno;
   }
 #endif
