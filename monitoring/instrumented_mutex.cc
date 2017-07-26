@@ -8,6 +8,10 @@
 #include "monitoring/thread_status_util.h"
 #include "util/sync_point.h"
 
+#define TRACEPOINT_CREATE_PROBES
+#define TRACEPOINT_DEFINE
+#include "mutex.h"
+
 namespace rocksdb {
 namespace {
 bool ShouldReportToStats(Env* env, Statistics* stats) {
@@ -36,6 +40,16 @@ void InstrumentedMutex::LockInternal() {
   ThreadStatusUtil::TEST_StateDelay(ThreadStatus::STATE_MUTEX_WAIT);
 #endif
   mutex_.Lock();
+  if (stats_code_ == DB_MUTEX_WAIT_MICROS) {
+    tracepoint(rocksdb, db_mutex_lock_acq, &mutex_, env_->GetThreadID());
+  }
+}
+
+void InstrumentedMutex::Unlock() {
+  if (stats_code_ == DB_MUTEX_WAIT_MICROS) {
+    tracepoint(rocksdb, db_mutex_unlock, &mutex_, env_->GetThreadID());
+  }
+  mutex_.Unlock();
 }
 
 void InstrumentedCondVar::Wait() {

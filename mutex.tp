@@ -1,0 +1,15 @@
+TRACEPOINT_EVENT(rocksdb, db_mutex_lock_acq,
+	TP_ARGS(void *, mutex, unsigned long long, tid),
+	TP_FIELDS(
+    ctf_integer_hex(void *, mutex, mutex)
+    ctf_integer_hex(unsigned long long, tid, tid)
+	)
+)
+
+TRACEPOINT_EVENT(rocksdb, db_mutex_unlock,
+	TP_ARGS(void *, mutex, unsigned long long, tid),
+	TP_FIELDS(
+    ctf_integer_hex(void *, mutex, mutex)
+    ctf_integer_hex(unsigned long long, tid, tid)
+	)
+)
