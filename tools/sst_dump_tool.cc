@@ -358,13 +358,13 @@ void print_help() {
     --file=<data_dir_OR_sst_file>
       Path to SST file or directory containing SST files
 
-    --command=check|scan|raw|verify
+    --command=check|scan|raw|verify|recompress
         check: Iterate over entries in files but dont print anything except if an error is encounterd (default command)
         scan: Iterate over entries in files and print them to screen
         raw: Dump all the table contents to <file_name>_dump.txt
         verify: Iterate all the blocks in files verifying checksum to detect possible coruption but dont print anything except if a corruption is encountered
-        recompress: reports the SST file size if recompressed with different
-                    compression types
+        recompress: recreates the SST file with different compression types and
+                    report the size of the file using such compression
 
     --output_hex
       Can be combined with scan command to print the keys and values in Hex
@@ -489,6 +489,7 @@ int SSTDumpTool::Run(int argc, char** argv) {
         }
         compression_types.emplace_back(*iter);
       }
+      iss >> block_size;
     } else if (strncmp(argv[i], "--parse_internal_key=", 21) == 0) {
       std::string in_key(argv[i] + 21);
       try {
@@ -574,7 +575,7 @@ int SSTDumpTool::Run(int argc, char** argv) {
       reader.ShowAllCompressionSizes(
           set_block_size ? block_size : 16384,
           compression_types.empty() ? kCompressions : compression_types);
-      return 0;
+      continue;
     }
 
     if (command == "raw") {
