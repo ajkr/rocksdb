@@ -37,7 +37,8 @@ class SstFileReader {
   int ShowAllCompressionSizes(
       size_t block_size,
       const std::vector<std::pair<CompressionType, const char*>>&
-          compression_types);
+          compression_types,
+      size_t zstd_compression_dict_bytes);
 
  private:
   // Get the TableReader implementation for the sst file

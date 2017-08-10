@@ -31,6 +31,7 @@
 #include "table/block.h"
 #include "table/block_based_table_builder.h"
 #include "table/block_based_table_factory.h"
+#include "table/block_based_table_reader.h"
 #include "table/block_builder.h"
 #include "table/format.h"
 #include "table/meta_blocks.h"
@@ -188,7 +189,51 @@ uint64_t SstFileReader::CalculateCompressedTableSize(
 int SstFileReader::ShowAllCompressionSizes(
     size_t block_size,
     const std::vector<std::pair<CompressionType, const char*>>&
-        compression_types) {
+        compression_types,
+    size_t zstd_max_compression_dict_bytes) {
+  std::string zstd_dict;
+  if (zstd_max_compression_dict_bytes > 0) {
+    if (BlockBasedTableFactory::kName != options_.table_factory->Name()) {
+      fprintf(stderr,
+              "zstd_max_compression_dict_bytes unsupported with non-block-based "
+              "tables\n");
+      return 1;
+    }
+    auto* bbtr = static_cast<BlockBasedTable*>(table_reader_.get());
+    std::vector<KVPairBlock> kv_pair_blocks;
+    Status s = bbtr->GetKVPairsFromDataBlocks(&kv_pair_blocks);
+    if (!s.ok()) {
+      fprintf(stderr, "Error reading input file's data blocks: %s\n",
+              s.ToString().c_str());
+      return 1;
+    }
+    std::vector<size_t> block_lens;
+    block_lens.reserve(kv_pair_blocks.size());
+    size_t total_block_len = 0;
+    for (const auto& kv_pair_block : kv_pair_blocks) {
+      block_lens.emplace_back(0);
+      for (const auto& kv_pair : kv_pair_block) {
+        block_lens.back() += kv_pair.first.size();
+        block_lens.back() += kv_pair.second.size();
+      }
+      total_block_len += block_lens.back();
+    }
+    assert(block_lens.size() == kv_pair_blocks.size());
+
+    std::string serialized_data;
+    serialized_data.reserve(total_block_len);
+    for (const auto& kv_pair_block : kv_pair_blocks) {
+      for (const auto& kv_pair : kv_pair_block) {
+        serialized_data.append(kv_pair.first);
+        serialized_data.append(kv_pair.second);
+      }
+    }
+    assert(serialized_data.size() == total_block_len);
+
+    zstd_dict =
+        ZSTD_TrainDictionary(serialized_data, block_lens, zstd_max_compression_dict_bytes);
+    fprintf(stdout, "ZSTD dictionary size: %" ROCKSDB_PRIszt "\n", zstd_dict.size());
+  }
   ReadOptions read_options;
   Options opts;
   const ImmutableCFOptions imoptions(opts);
@@ -204,8 +249,7 @@ int SstFileReader::ShowAllCompressionSizes(
       std::string column_family_name;
       int unknown_level = -1;
       TableBuilderOptions tb_opts(imoptions, ikc, &block_based_table_factories,
-                                  i.first, compress_opt,
-                                  nullptr /* compression_dict */,
+                                  i.first, compress_opt, &zstd_dict,
                                   false /* skip_filters */, column_family_name,
                                   unknown_level);
       uint64_t file_size = CalculateCompressedTableSize(tb_opts, block_size);
@@ -401,6 +445,10 @@ void print_help() {
       Can be combined with --command=recompress to run recompression for this
       list of compression types
 
+    --zstd_max_compression_dict_bytes=<num>
+      Can be combined with --command=recompress to enable ZSTD's compression
+      dictionary generator with the specified maximum dictionary size.
+
     --parse_internal_key=<0xKEY>
       Convenience option to parse an internal key on the command line. Dumps the
       internal key in hex format {'key' @ SN: type}
@@ -430,6 +478,7 @@ int SSTDumpTool::Run(int argc, char** argv) {
   std::string block_size_str;
   size_t block_size;
   std::vector<std::pair<CompressionType, const char*>> compression_types;
+  size_t zstd_max_compression_dict_bytes = 0;
   uint64_t total_num_files = 0;
   uint64_t total_num_data_blocks = 0;
   uint64_t total_data_block_size = 0;
@@ -489,7 +538,13 @@ int SSTDumpTool::Run(int argc, char** argv) {
         }
         compression_types.emplace_back(*iter);
       }
-      iss >> block_size;
+    } else if (strncmp(argv[i], "--zstd_max_compression_dict_bytes=", 34) == 0) {
+      std::istringstream iss(argv[i] + 34);
+      iss >> zstd_max_compression_dict_bytes;
+      if (iss.fail()) {
+        fprintf(stderr, "zstd_max_compression_dict_bytes must be numeric\n");
+        exit(1);
+      }
     } else if (strncmp(argv[i], "--parse_internal_key=", 21) == 0) {
       std::string in_key(argv[i] + 21);
       try {
@@ -574,7 +629,8 @@ int SSTDumpTool::Run(int argc, char** argv) {
     if (command == "recompress") {
       reader.ShowAllCompressionSizes(
           set_block_size ? block_size : 16384,
-          compression_types.empty() ? kCompressions : compression_types);
+          compression_types.empty() ? kCompressions : compression_types,
+          zstd_max_compression_dict_bytes);
       continue;
     }
 
