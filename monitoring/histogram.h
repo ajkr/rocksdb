@@ -20,8 +20,9 @@ namespace rocksdb {
 
 class HistogramBucketMapper {
  public:
-
-  HistogramBucketMapper();
+  // @param scaling_factor The ratio between successive bucket endpoints (before
+  // rounding).
+  HistogramBucketMapper(double scaling_factor = 1.5);
 
   // converts a value to the bucket index.
   size_t IndexForValue(uint64_t value) const;
@@ -52,7 +53,7 @@ class HistogramBucketMapper {
 };
 
 struct HistogramStat {
-  HistogramStat();
+  HistogramStat(const HistogramBucketMapper* bucket_mapper = nullptr);
   ~HistogramStat() {}
 
   HistogramStat(const HistogramStat&) = delete;
@@ -89,8 +90,10 @@ struct HistogramStat {
   std::atomic_uint_fast64_t num_;
   std::atomic_uint_fast64_t sum_;
   std::atomic_uint_fast64_t sum_squares_;
-  std::atomic_uint_fast64_t buckets_[109]; // 109==BucketMapper::BucketCount()
+
+  const HistogramBucketMapper* bucket_mapper_;
   const uint64_t num_buckets_;
+  std::unique_ptr<std::atomic_uint_fast64_t[]> buckets_;
 };
 
 class Histogram {
@@ -117,7 +120,10 @@ public:
 
 class HistogramImpl : public Histogram {
  public:
-  HistogramImpl() { Clear(); }
+  HistogramImpl(const HistogramBucketMapper* bucket_mapper = nullptr)
+      : stats_(bucket_mapper) {
+    Clear();
+  }
 
   HistogramImpl(const HistogramImpl&) = delete;
   HistogramImpl& operator=(const HistogramImpl&) = delete;

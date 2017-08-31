@@ -1423,6 +1423,7 @@ class Stats {
   uint64_t bytes_;
   uint64_t last_op_finish_;
   uint64_t last_report_finish_;
+  const HistogramBucketMapper hist_mapper_;
   std::unordered_map<OperationType, std::shared_ptr<HistogramImpl>,
                      std::hash<unsigned char>> hist_;
   std::string message_;
@@ -1431,7 +1432,7 @@ class Stats {
   friend class CombinedStats;
 
  public:
-  Stats() { Start(-1); }
+  Stats() : hist_mapper_(1.1 /* scaling_factor */) { Start(-1); }
 
   void SetReporterAgent(ReporterAgent* reporter_agent) {
     reporter_agent_ = reporter_agent;
@@ -1535,7 +1536,7 @@ class Stats {
 
       if (hist_.find(op_type) == hist_.end())
       {
-        auto hist_temp = std::make_shared<HistogramImpl>();
+        auto hist_temp = std::make_shared<HistogramImpl>(&hist_mapper_);
         hist_.insert({op_type, std::move(hist_temp)});
       }
       hist_[op_type]->Add(micros);
