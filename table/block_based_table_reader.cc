@@ -1368,6 +1368,57 @@ InternalIterator* BlockBasedTable::NewDataBlockIterator(
   return NewDataBlockIterator(rep, ro, handle, input_iter, is_index, s);
 }
 
+Status BlockBasedTable::GetDataBlocks(std::vector<std::string>* data_blocks) {
+  assert(data_blocks != nullptr);
+  std::unique_ptr<InternalIterator> blockhandles_iter(
+      NewIndexIterator(ReadOptions()));
+
+  Status s = blockhandles_iter->status();
+  if (!s.ok()) {
+    // Cannot read Index Block
+    return s;
+  }
+
+  for (blockhandles_iter->SeekToFirst(); blockhandles_iter->Valid();
+       blockhandles_iter->Next()) {
+    s = blockhandles_iter->status();
+
+    if (!s.ok()) {
+      break;
+    }
+
+    std::string data_block;
+    s = GetDataBlock(ReadOptions(), blockhandles_iter->value(), &data_block);
+    if (!s.ok()) {
+      return s;
+    }
+    data_blocks->push_back(std::move(data_block));
+  }
+  return Status::OK();
+}
+
+Status BlockBasedTable::GetDataBlock(
+    const ReadOptions& ro, const Slice& index_value, std::string* res) {
+  assert(res != nullptr);
+  BlockHandle handle;
+  Slice input = index_value;
+  Status s = handle.DecodeFrom(&input);
+  if (!s.ok()) {
+    return s;
+  }
+  std::unique_ptr<Block> raw_block;
+  s = ReadBlockFromFile(
+      rep_->file.get(), nullptr /* prefetch_buffer */, rep_->footer, ro, handle,
+      &raw_block, rep_->ioptions, true /* do_uncompress */,
+      Slice() /* compression_dict */, rep_->persistent_cache_options, rep_->global_seqno,
+      rep_->table_options.read_amp_bytes_per_bit);
+  if (!s.ok()) {
+    return s;
+  }
+  *res = std::string(raw_block->data(), raw_block->size());
+  return Status::OK();
+}
+
 // Convert an index iterator value (i.e., an encoded BlockHandle)
 // into an iterator over the contents of the corresponding block.
 // If input_iter is null, new a iterator

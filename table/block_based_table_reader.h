@@ -201,6 +201,8 @@ class BlockBasedTable : public TableReader {
   // The key retrieved are internal keys.
   Status GetKVPairsFromDataBlocks(std::vector<KVPairBlock>* kv_pair_blocks);
 
+  Status GetDataBlocks(std::vector<std::string>* data_blocks);
+
   class BlockEntryIteratorState;
 
   friend class PartitionIndexReader;
@@ -214,6 +216,9 @@ class BlockBasedTable : public TableReader {
 
  private:
   friend class MockedBlockBasedTable;
+  Status GetDataBlock(
+      const ReadOptions& ro, const Slice& index_value, std::string* res);
+
   // input_iter: if it is not null, update this one and return it as Iterator
   static InternalIterator* NewDataBlockIterator(Rep* rep, const ReadOptions& ro,
                                                 const Slice& index_value,

@@ -200,39 +200,41 @@ int SstFileReader::ShowAllCompressionSizes(
       return 1;
     }
     auto* bbtr = static_cast<BlockBasedTable*>(table_reader_.get());
-    std::vector<KVPairBlock> kv_pair_blocks;
-    Status s = bbtr->GetKVPairsFromDataBlocks(&kv_pair_blocks);
+    std::vector<std::string> data_blocks;
+    Status s = bbtr->GetDataBlocks(&data_blocks);
     if (!s.ok()) {
       fprintf(stderr, "Error reading input file's data blocks: %s\n",
               s.ToString().c_str());
       return 1;
     }
     std::vector<size_t> block_lens;
-    block_lens.reserve(kv_pair_blocks.size());
+    block_lens.reserve(data_blocks.size());
     size_t total_block_len = 0;
-    for (const auto& kv_pair_block : kv_pair_blocks) {
-      block_lens.emplace_back(0);
-      for (const auto& kv_pair : kv_pair_block) {
-        block_lens.back() += kv_pair.first.size();
-        block_lens.back() += kv_pair.second.size();
-      }
+    for (const auto& data_block : data_blocks) {
+      block_lens.emplace_back(data_block.size());
       total_block_len += block_lens.back();
     }
-    assert(block_lens.size() == kv_pair_blocks.size());
+    assert(block_lens.size() == data_blocks.size());
+    fprintf(stdout, "ZSTD dictionary input blocks: %" ROCKSDB_PRIszt "\n", block_lens.size());
 
     std::string serialized_data;
     serialized_data.reserve(total_block_len);
-    for (const auto& kv_pair_block : kv_pair_blocks) {
-      for (const auto& kv_pair : kv_pair_block) {
-        serialized_data.append(kv_pair.first);
-        serialized_data.append(kv_pair.second);
-      }
+    for (const auto& data_block : data_blocks) {
+      serialized_data.append(data_block);
     }
     assert(serialized_data.size() == total_block_len);
+    fprintf(stdout, "ZSTD dictionary input block bytes: %" ROCKSDB_PRIszt "\n", serialized_data.size());
 
     zstd_dict =
         ZSTD_TrainDictionary(serialized_data, block_lens, zstd_max_compression_dict_bytes);
     fprintf(stdout, "ZSTD dictionary size: %" ROCKSDB_PRIszt "\n", zstd_dict.size());
+    fprintf(stdout, "ZSTD dictionary contents: ");
+    for (auto c : zstd_dict) {
+      if (isprint(c)) {
+        fprintf(stdout, "%c", c);
+      }
+    }
+    fprintf(stdout, "\n");
   }
   ReadOptions read_options;
   Options opts;
