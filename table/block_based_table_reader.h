@@ -216,8 +216,8 @@ class BlockBasedTable : public TableReader {
 
  private:
   friend class MockedBlockBasedTable;
-  Status GetDataBlock(
-      const ReadOptions& ro, const Slice& index_value, std::string* res);
+  Status GetDataBlock(const ReadOptions& ro, const Slice& index_value,
+                      std::string* res);
 
   // input_iter: if it is not null, update this one and return it as Iterator
   static InternalIterator* NewDataBlockIterator(Rep* rep, const ReadOptions& ro,

@@ -40,6 +40,7 @@ class TableFactory;
 
 TableBuilder* NewTableBuilder(
     const ImmutableCFOptions& ioptions,
+    const MutableCFOptions& mutable_cf_options,
     const InternalKeyComparator& internal_comparator,
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
@@ -47,14 +48,15 @@ TableBuilder* NewTableBuilder(
     WritableFileWriter* file, const CompressionType compression_type,
     const CompressionOptions& compression_opts, int level,
     const std::string* compression_dict, const bool skip_filters,
-    const uint64_t creation_time) {
+    const uint64_t creation_time, std::string* compression_dict_samples) {
   assert((column_family_id ==
           TablePropertiesCollectorFactory::Context::kUnknownColumnFamily) ==
          column_family_name.empty());
   return ioptions.table_factory->NewTableBuilder(
-      TableBuilderOptions(ioptions, internal_comparator,
+      TableBuilderOptions(ioptions, mutable_cf_options, internal_comparator,
                           int_tbl_prop_collector_factories, compression_type,
-                          compression_opts, compression_dict, skip_filters,
+                          compression_opts, compression_dict,
+                          compression_dict_samples, skip_filters,
                           column_family_name, level, creation_time),
       column_family_id, file);
 }
@@ -122,10 +124,11 @@ Status BuildTable(
                                                ioptions.statistics));
 
       builder = NewTableBuilder(
-          ioptions, internal_comparator, int_tbl_prop_collector_factories,
-          column_family_id, column_family_name, file_writer.get(), compression,
-          compression_opts, level, nullptr /* compression_dict */,
-          false /* skip_filters */, creation_time);
+          ioptions, mutable_cf_options, internal_comparator,
+          int_tbl_prop_collector_factories, column_family_id,
+          column_family_name, file_writer.get(), compression, compression_opts,
+          level, nullptr /* compression_dict */, false /* skip_filters */,
+          creation_time);
     }
 
     MergeHelper merge(env, internal_comparator.user_comparator(),

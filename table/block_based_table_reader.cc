@@ -1397,8 +1397,9 @@ Status BlockBasedTable::GetDataBlocks(std::vector<std::string>* data_blocks) {
   return Status::OK();
 }
 
-Status BlockBasedTable::GetDataBlock(
-    const ReadOptions& ro, const Slice& index_value, std::string* res) {
+Status BlockBasedTable::GetDataBlock(const ReadOptions& ro,
+                                     const Slice& index_value,
+                                     std::string* res) {
   assert(res != nullptr);
   BlockHandle handle;
   Slice input = index_value;
@@ -1410,8 +1411,8 @@ Status BlockBasedTable::GetDataBlock(
   s = ReadBlockFromFile(
       rep_->file.get(), nullptr /* prefetch_buffer */, rep_->footer, ro, handle,
       &raw_block, rep_->ioptions, true /* do_uncompress */,
-      Slice() /* compression_dict */, rep_->persistent_cache_options, rep_->global_seqno,
-      rep_->table_options.read_amp_bytes_per_bit);
+      Slice() /* compression_dict */, rep_->persistent_cache_options,
+      rep_->global_seqno, rep_->table_options.read_amp_bytes_per_bit);
   if (!s.ok()) {
     return s;
   }

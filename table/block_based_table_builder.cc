@@ -262,6 +262,8 @@ struct BlockBasedTableBuilder::Rep {
   const CompressionOptions compression_opts;
   // Data for presetting the compression library's dictionary, or nullptr.
   const std::string* compression_dict;
+  // Data sample buffer for generating compression dictionary, or nullptr.
+  std::string* compression_dict_samples;
   TableProperties props;
 
   bool closed = false;  // Either Finish() or Abandon() has been called.
@@ -280,6 +282,7 @@ struct BlockBasedTableBuilder::Rep {
   std::vector<std::unique_ptr<IntTblPropCollector>> table_properties_collectors;
 
   Rep(const ImmutableCFOptions& _ioptions,
+      const MutableCFOptions& _mutable_cf_options,
       const BlockBasedTableOptions& table_opt,
       const InternalKeyComparator& icomparator,
       const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
@@ -287,8 +290,10 @@ struct BlockBasedTableBuilder::Rep {
       uint32_t _column_family_id, WritableFileWriter* f,
       const CompressionType _compression_type,
       const CompressionOptions& _compression_opts,
-      const std::string* _compression_dict, const bool skip_filters,
-      const std::string& _column_family_name, const uint64_t _creation_time)
+      const std::string* _compression_dict,
+      std::string* _compression_dict_samples, const bool skip_filters,
+      const std::string& _column_family_name, int _level,
+      const uint64_t _creation_time)
       : ioptions(_ioptions),
         table_options(table_opt),
         internal_comparator(icomparator),
@@ -300,6 +305,7 @@ struct BlockBasedTableBuilder::Rep {
         compression_type(_compression_type),
         compression_opts(_compression_opts),
         compression_dict(_compression_dict),
+        compression_dict_samples(_compression_dict_samples),
         flush_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
                 table_options, data_block)),
@@ -336,6 +342,7 @@ struct BlockBasedTableBuilder::Rep {
 
 BlockBasedTableBuilder::BlockBasedTableBuilder(
     const ImmutableCFOptions& ioptions,
+    const MutableCFOptions& mutable_cf_options,
     const BlockBasedTableOptions& table_options,
     const InternalKeyComparator& internal_comparator,
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
@@ -343,8 +350,9 @@ BlockBasedTableBuilder::BlockBasedTableBuilder(
     uint32_t column_family_id, WritableFileWriter* file,
     const CompressionType compression_type,
     const CompressionOptions& compression_opts,
-    const std::string* compression_dict, const bool skip_filters,
-    const std::string& column_family_name, const uint64_t creation_time) {
+    const std::string* compression_dict, std::string* compression_dict_samples,
+    const bool skip_filters, const std::string& column_family_name, int level,
+    const uint64_t creation_time) {
   BlockBasedTableOptions sanitized_table_options(table_options);
   if (sanitized_table_options.format_version == 0 &&
       sanitized_table_options.checksum != kCRC32c) {
@@ -357,10 +365,11 @@ BlockBasedTableBuilder::BlockBasedTableBuilder(
     sanitized_table_options.format_version = 1;
   }
 
-  rep_ = new Rep(ioptions, sanitized_table_options, internal_comparator,
-                 int_tbl_prop_collector_factories, column_family_id, file,
-                 compression_type, compression_opts, compression_dict,
-                 skip_filters, column_family_name, creation_time);
+  rep_ = new Rep(ioptions, mutable_cf_options, sanitized_table_options,
+                 internal_comparator, int_tbl_prop_collector_factories,
+                 column_family_id, file, compression_type, compression_opts,
+                 compression_dict, compression_dict_samples, skip_filters,
+                 column_family_name, level, creation_time);
 
   if (rep_->filter_builder != nullptr) {
     rep_->filter_builder->StartBlock(0);
@@ -848,6 +857,7 @@ bool BlockBasedTableBuilder::NeedCompact() const {
 }
 
 TableProperties BlockBasedTableBuilder::GetTableProperties() const {
+  assert(rep_->closed);
   TableProperties ret = rep_->props;
   for (const auto& collector : rep_->table_properties_collectors) {
     for (const auto& prop : collector->GetReadableProperties()) {

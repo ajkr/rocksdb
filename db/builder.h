@@ -41,8 +41,12 @@ class InternalIterator;
 //    TableBuilder returned by this function.
 // @param compression_dict Data for presetting the compression library's
 //    dictionary, or nullptr.
+// @param compression_dict_samples Data sample buffer for generating compression
+//    dictionary, or nullptr. It is populated as the table is built according to
+//    the CompressionOptions.
 TableBuilder* NewTableBuilder(
     const ImmutableCFOptions& options,
+    const MutableCFOptions& mutable_cf_options,
     const InternalKeyComparator& internal_comparator,
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
@@ -50,7 +54,8 @@ TableBuilder* NewTableBuilder(
     WritableFileWriter* file, const CompressionType compression_type,
     const CompressionOptions& compression_opts, int level,
     const std::string* compression_dict = nullptr,
-    const bool skip_filters = false, const uint64_t creation_time = 0);
+    const bool skip_filters = false, const uint64_t creation_time = 0,
+    std::string* compression_dict_samples = nullptr);
 
 // Build a Table file from the contents of *iter.  The generated file
 // will be named according to number specified in meta. On success, the rest of

@@ -37,8 +37,12 @@ class BlockBasedTableBuilder : public TableBuilder {
   // caller to close the file after calling Finish().
   // @param compression_dict Data for presetting the compression library's
   //    dictionary, or nullptr.
+  // @param Data sample buffer for generating compression dictionary, or
+  //    nullptr. It is populated as the table is built according to the
+  //    CompressionOptions.
   BlockBasedTableBuilder(
       const ImmutableCFOptions& ioptions,
+      const MutableCFOptions& mutable_cf_options,
       const BlockBasedTableOptions& table_options,
       const InternalKeyComparator& internal_comparator,
       const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
@@ -46,8 +50,10 @@ class BlockBasedTableBuilder : public TableBuilder {
       uint32_t column_family_id, WritableFileWriter* file,
       const CompressionType compression_type,
       const CompressionOptions& compression_opts,
-      const std::string* compression_dict, const bool skip_filters,
-      const std::string& column_family_name, const uint64_t creation_time = 0);
+      const std::string* compression_dict,
+      std::string* compression_dict_samples, const bool skip_filters,
+      const std::string& column_family_name, int level,
+      const uint64_t creation_time = 0);
 
   // REQUIRES: Either Finish() or Abandon() has been called.
   ~BlockBasedTableBuilder();
