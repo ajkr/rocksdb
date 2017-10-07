@@ -258,12 +258,19 @@ struct BlockBasedTableBuilder::Rep {
   PartitionedIndexBuilder* p_index_builder_ = nullptr;
 
   std::string last_key;
+
   const CompressionType compression_type;
   const CompressionOptions compression_opts;
   // Data for presetting the compression library's dictionary, or nullptr.
   const std::string* compression_dict;
   // Data sample buffer for generating compression dictionary, or nullptr.
   std::string* compression_dict_samples;
+  // Offsets at which to sample output file for dictionary generation.
+  std::set<size_t> dict_sample_begin_offsets;
+  std::set<size_t>::const_iterator dict_sample_begin_offsets_iter;
+  size_t data_begin_offset = 0;
+  const int kDictSampleLenShift = 6;  // 2^6 = 64-byte samples
+
   TableProperties props;
 
   bool closed = false;  // Either Finish() or Abandon() has been called.
@@ -337,6 +344,25 @@ struct BlockBasedTableBuilder::Rep {
         new BlockBasedTablePropertiesCollector(
             table_options.index_type, table_options.whole_key_filtering,
             _ioptions.prefix_extractor != nullptr));
+
+    if (compression_dict_samples != nullptr) {
+      const size_t kSampleBytes = compression_opts.zstd_max_train_bytes > 0
+                                      ? compression_opts.zstd_max_train_bytes
+                                      : compression_opts.max_dict_bytes;
+      const size_t kMaxSamples = kSampleBytes >> kDictSampleLenShift;
+      const size_t kOutFileLen =
+          _mutable_cf_options.MaxFileSizeForLevel(_level == -1 ? 0 : _level);
+      if (kOutFileLen != port::kMaxSizet) {
+        const size_t kOutFileNumSamples = kOutFileLen >> kDictSampleLenShift;
+        Random64 generator{creation_time};
+        for (size_t i = 0; i < kMaxSamples; ++i) {
+          dict_sample_begin_offsets.insert(generator.Uniform(kOutFileNumSamples)
+                                           << kDictSampleLenShift);
+        }
+      }
+      dict_sample_begin_offsets_iter = dict_sample_begin_offsets.cbegin();
+      compression_dict_samples->reserve(kSampleBytes);
+    }
   }
 };
 
@@ -482,6 +508,56 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
 
   StopWatchNano timer(r->ioptions.env,
     ShouldReportDetailedTime(r->ioptions.env, r->ioptions.statistics));
+
+  if (r->compression_dict_samples != nullptr) {
+    // Check if this uncompressed block overlaps any sample intervals; if so,
+    // appends overlapping portions to the dictionary.
+    size_t data_end_offset = r->data_begin_offset + raw_block_contents.size();
+    size_t sample_begin_offset;
+    while (r->dict_sample_begin_offsets_iter !=
+               r->dict_sample_begin_offsets.cend() &&
+           (sample_begin_offset = *r->dict_sample_begin_offsets_iter) <
+               data_end_offset) {
+      size_t sample_end_offset =
+          sample_begin_offset + (1 << r->kDictSampleLenShift);
+      // Invariant: Because we advance sample iterator while processing the
+      // data block containing the sample's last byte, the current sample
+      // cannot end before the current data block.
+      assert(r->data_begin_offset < sample_end_offset);
+
+      size_t data_block_copy_offset, data_block_copy_len;
+      if (sample_begin_offset <= r->data_begin_offset) {
+        // The sample starts before data block starts, so take bytes starting
+        // at the beginning of data block.
+        data_block_copy_offset = 0;
+      } else {
+        // data block starts before the sample starts, so take bytes starting
+        // at the below offset into data block.
+        data_block_copy_offset = sample_begin_offset - r->data_begin_offset;
+      }
+      if (sample_end_offset <= data_end_offset) {
+        // The sample ends before data block ends, so take as many bytes as
+        // needed.
+        data_block_copy_len =
+            sample_end_offset - (r->data_begin_offset + data_block_copy_offset);
+      } else {
+        // data block ends before the sample ends, so take all remaining
+        // bytes in data block.
+        data_block_copy_len =
+            data_end_offset - (r->data_begin_offset + data_block_copy_offset);
+      }
+      r->compression_dict_samples->append(
+          &raw_block_contents.data()[data_block_copy_offset],
+          data_block_copy_len);
+      if (sample_end_offset > data_end_offset) {
+        // Didn't finish sample. Try to finish it with the next data block.
+        break;
+      }
+      // Next sample may require bytes from same data block.
+      r->dict_sample_begin_offsets_iter++;
+    }
+    r->data_begin_offset = data_end_offset;
+  }
 
   if (raw_block_contents.size() < kCompressionSizeLimit) {
     Slice compression_dict;
