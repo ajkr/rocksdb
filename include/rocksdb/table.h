@@ -217,6 +217,9 @@ struct BlockBasedTableOptions {
   // This option only affects newly written tables. When reading exising tables,
   // the information about version is read from the footer.
   uint32_t format_version = 2;
+
+  // Align data blocks on greater of page size and logical sector size
+  bool block_align = true;
 };
 
 // Table Properties that are specific to block-based table properties.

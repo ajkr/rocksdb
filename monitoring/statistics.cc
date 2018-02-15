@@ -169,11 +169,12 @@ std::string StatisticsImpl::ToString() const {
       char buffer[kTmpStrBufferSize];
       HistogramData hData;
       getHistogramImplLocked(h.first)->Data(&hData);
-      snprintf(
-          buffer, kTmpStrBufferSize,
-          "%s statistics Percentiles :=> 50 : %f 95 : %f 99 : %f 100 : %f\n",
-          h.second.c_str(), hData.median, hData.percentile95,
-          hData.percentile99, hData.max);
+      snprintf(buffer, kTmpStrBufferSize,
+               "%s statistics Percentiles :=> 50 : %f 95 : %f 99 : %f 100 : %f "
+               "Ave : %f StdDev : %f\n",
+               h.second.c_str(), hData.median, hData.percentile95,
+               hData.percentile99, hData.max, hData.average,
+               hData.standard_deviation);
       res.append(buffer);
     }
   }
