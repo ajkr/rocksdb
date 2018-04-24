@@ -4,6 +4,9 @@
 * Fix memory leak when pin_l0_filter_and_index_blocks_in_cache is used with partitioned filters
 * Fix memory leak in two_level_iterator
 
+### New Features
+* Add `Env::LowerThreadPoolCPUPriority(Priority)` method, which lowers the CPU priority of background (esp. compaction) threads to minimize interference with foreground tasks.
+
 ## 5.12.2 (3/23/2018)
 ### Bug Fixes
 * Fsync after writing global seq number to the ingestion file in ExternalSstFileIngestionJob.
