@@ -360,7 +360,24 @@ DEFINE_bool(use_txn, false,
             "Use TransactionDB. Currently the default write policy is "
             "TxnDBWritePolicy::WRITE_PREPARED");
 
-// Temporarily disable this to allows it to detect new bugs
+DEFINE_int32(backup_one_in, 0,
+             "If non-zero, then CreateNewBackup() will be called once for "
+             "every N operations on average.  0 indicates CreateNewBackup() "
+             "is disabled.");
+
+DEFINE_int32(checkpoint_one_in, 0,
+             "If non-zero, then CreateCheckpoint() will be called once for "
+             "every N operations on average.  0 indicates CreateCheckpoint() "
+             "is disabled.");
+
+DEFINE_int32(ingest_external_file_one_in, 0,
+             "If non-zero, then IngestExternalFile() will be called once for "
+             "every N operations on average.  0 indicates IngestExternalFile() "
+             "is disabled.");
+
+DEFINE_int32(ingest_external_file_width, 1000,
+             "The width of the ingested external files.");
+
 DEFINE_int32(compact_files_one_in, 0,
              "If non-zero, then CompactFiles() will be called one for every N "
              "operations IN AVERAGE.  0 indicates CompactFiles() is disabled.");
@@ -1883,6 +1900,32 @@ class StressTest {
 
       auto column_family = column_families_[rand_column_family];
 
+      if (FLAGS_compact_range_one_in > 0 &&
+          thread->rand.Uniform(FLAGS_compact_range_one_in) == 0) {
+        int64_t end_key_num;
+        if (port::kMaxInt64 - rand_key < FLAGS_compact_range_width) {
+          end_key_num = port::kMaxInt64;
+        } else {
+          end_key_num = FLAGS_compact_range_width + rand_key;
+        }
+        std::string end_key_buf = Key(end_key_num);
+        Slice end_key(end_key_buf);
+
+        CompactRangeOptions cro;
+        cro.exclusive_manual_compaction =
+            static_cast<bool>(thread->rand.Next() % 2);
+        Status status = db_->CompactRange(cro, column_family, &key, &end_key);
+        if (!status.ok()) {
+          printf("Unable to perform CompactRange(): %s\n",
+                 status.ToString().c_str());
+        }
+      }
+
+      if (FLAGS_ingest_external_file_one_in > 0 &&
+          thread->rand.Uniform(FLAGS_ingest_external_file_one_in) == 0) {
+        TestIngestExternalFile(thread, {rand_column_family}, {rand_key}, lock);
+      }
+
       if (FLAGS_acquire_snapshot_one_in > 0 &&
           thread->rand.Uniform(FLAGS_acquire_snapshot_one_in) == 0) {
         auto snapshot = db_->GetSnapshot();
@@ -2714,6 +2757,17 @@ int main(int argc, char** argv) {
   if (FLAGS_value_size_mult * kRandomValueMaxFactor > kValueMaxLen) {
     fprintf(stderr, "Error: value_size_mult can be at most %d\n",
             kValueMaxLen / kRandomValueMaxFactor);
+    exit(1);
+  }
+  if (FLAGS_use_merge && FLAGS_nooverwritepercent == 100) {
+    fprintf(
+        stderr,
+        "Error: nooverwritepercent must not be 100 when using merge operands");
+    exit(1);
+  }
+  if (FLAGS_ingest_external_file_one_in > 0 && FLAGS_nooverwritepercent > 0) {
+    fprintf(stderr,
+            "Error: nooverwritepercent must be 0 when using file ingestion\n");
     exit(1);
   }
 
