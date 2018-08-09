@@ -259,7 +259,7 @@ class BlockBasedTable : public TableReader {
   //    block.
   static Status MaybeReadBlockAndLoadToCache(
       FilePrefetchBuffer* prefetch_buffer, Rep* rep, const ReadOptions& ro,
-      const BlockHandle& handle, Slice compression_dict,
+      const BlockHandle& handle, const CompressionDict& compression_dict,
       CachableEntry<Block>* block_entry, bool is_index = false,
       GetContext* get_context = nullptr);
 
@@ -302,7 +302,7 @@ class BlockBasedTable : public TableReader {
       Cache* block_cache, Cache* block_cache_compressed, Rep* rep,
       const ReadOptions& read_options,
       BlockBasedTable::CachableEntry<Block>* block,
-      const Slice& compression_dict, size_t read_amp_bytes_per_bit,
+      const CompressionDict& compression_dict, size_t read_amp_bytes_per_bit,
       bool is_index = false, GetContext* get_context = nullptr);
 
   // Put a raw block (maybe compressed) to the corresponding block caches.
@@ -321,7 +321,7 @@ class BlockBasedTable : public TableReader {
       const ReadOptions& read_options, const ImmutableCFOptions& ioptions,
       CachableEntry<Block>* block, BlockContents* raw_block_contents,
       CompressionType raw_block_comp_type, uint32_t format_version,
-      const Slice& compression_dict, SequenceNumber seq_no,
+      const CompressionDict& compression_dict, SequenceNumber seq_no,
       size_t read_amp_bytes_per_bit, bool is_index = false,
       Cache::Priority pri = Cache::Priority::LOW,
       GetContext* get_context = nullptr, MemoryAllocator* allocator = nullptr);
@@ -492,6 +492,7 @@ struct BlockBasedTable::Rep {
   // is easier because the Slice member depends on the continued existence of
   // another member ("allocation").
   std::unique_ptr<const BlockContents> compression_dict_block;
+  CompressionDict compression_dict;
   BlockBasedTableOptions::IndexType index_type;
   bool hash_index_allow_collision;
   bool whole_key_filtering;

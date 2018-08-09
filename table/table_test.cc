@@ -3575,12 +3575,12 @@ TEST_P(BlockBasedTableTest, PropertiesBlockRestartPointTest) {
                                 BlockContents* contents) {
       ReadOptions read_options;
       read_options.verify_checksums = false;
-      Slice compression_dict;
       PersistentCacheOptions cache_options;
 
       BlockFetcher block_fetcher(file, nullptr /* prefetch_buffer */, footer,
                                  read_options, handle, contents, ioptions,
-                                 false /* decompress */, compression_dict,
+                                 false /* decompress */,
+                                 CompressionDict::GetEmptyDict(),
                                  cache_options);
 
       ASSERT_OK(block_fetcher.ReadBlockContents());
@@ -3662,12 +3662,11 @@ TEST_P(BlockBasedTableTest, PropertiesMetaBlockLast) {
   // read metaindex
   auto metaindex_handle = footer.metaindex_handle();
   BlockContents metaindex_contents;
-  Slice compression_dict;
   PersistentCacheOptions pcache_opts;
   BlockFetcher block_fetcher(
       table_reader.get(), nullptr /* prefetch_buffer */, footer, ReadOptions(),
       metaindex_handle, &metaindex_contents, ioptions, false /* decompress */,
-      compression_dict, pcache_opts);
+      CompressionDict::GetEmptyDict(), pcache_opts);
   ASSERT_OK(block_fetcher.ReadBlockContents());
   Block metaindex_block(std::move(metaindex_contents),
                         kDisableGlobalSequenceNumber);

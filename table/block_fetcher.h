@@ -26,7 +26,7 @@ class BlockFetcher {
                FilePrefetchBuffer* prefetch_buffer, const Footer& footer,
                const ReadOptions& read_options, const BlockHandle& handle,
                BlockContents* contents, const ImmutableCFOptions& ioptions,
-               bool do_uncompress, const Slice& compression_dict,
+               bool do_uncompress, const CompressionDict& compression_dict,
                const PersistentCacheOptions& cache_options,
                MemoryAllocator* allocator = nullptr)
       : file_(file),
@@ -54,7 +54,7 @@ class BlockFetcher {
   BlockContents* contents_;
   const ImmutableCFOptions& ioptions_;
   bool do_uncompress_;
-  const Slice& compression_dict_;
+  const CompressionDict& compression_dict_;
   const PersistentCacheOptions& cache_options_;
   MemoryAllocator* allocator_;
   Status status_;
