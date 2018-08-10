@@ -503,7 +503,8 @@ void BlockBasedTableBuilder::Flush() {
 
 bool BlockBasedTableBuilder::IsBuffered() const {
   // TODO(ajkr): only do this for bottom-level files
-  return rep_->compression_opts.max_dict_bytes > 0 && !rep_->closed;
+  return rep_->compression_type == kZSTD &&
+         rep_->compression_opts.max_dict_bytes > 0 && !rep_->closed;
 }
 
 void BlockBasedTableBuilder::WriteBlock(BlockBuilder* block,
@@ -1033,7 +1034,7 @@ uint64_t BlockBasedTableBuilder::NumEntries() const {
 uint64_t BlockBasedTableBuilder::FileSize() const {
   if (IsBuffered()) {
     // TODO(ajkr): try to estimate the compressed size
-    return static_cast<uint64_t>(rep_->data_begin_offset);
+    return static_cast<uint64_t>(rep_->data_begin_offset) / 3;
   } else {
     return rep_->offset;
   }
