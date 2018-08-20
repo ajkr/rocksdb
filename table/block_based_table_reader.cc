@@ -945,7 +945,7 @@ Status BlockBasedTable::Open(const ImmutableCFOptions& ioptions,
           s.ToString().c_str());
     } else {
       rep->compression_dict_block = std::move(compression_dict_cont);
-      rep->compression_dict.Init(rep->compression_dict_block->data.ToString(),
+      rep->compression_dict.Init(rep->compression_dict_block->data,
                                  CompressionDict::Mode::kUncompression, kZSTD);
     }
   }
