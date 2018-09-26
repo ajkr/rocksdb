@@ -85,7 +85,6 @@ const char* GetFlushReasonString (FlushReason flush_reason) {
   }
 }
 
-
 FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
                    const ImmutableDBOptions& db_options,
                    const MutableCFOptions& mutable_cf_options,
@@ -98,7 +97,8 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
                    LogBuffer* log_buffer, Directory* db_directory,
                    Directory* output_file_directory,
                    CompressionType output_compression, Statistics* stats,
-                   EventLogger* event_logger, bool measure_io_stats)
+                   EventLogger* event_logger, bool measure_io_stats,
+                   Env::Priority thread_pri)
     : dbname_(dbname),
       cfd_(cfd),
       db_options_(db_options),
@@ -120,7 +120,8 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
       measure_io_stats_(measure_io_stats),
       edit_(nullptr),
       base_(nullptr),
-      pick_memtable_called(false) {
+      pick_memtable_called(false),
+      thread_pri_(thread_pri) {
   // Update the thread status to indicate flush.
   ReportStartedFlush();
   TEST_SYNC_POINT("FlushJob::FlushJob()");
@@ -400,7 +401,7 @@ Status FlushJob::WriteLevel0Table() {
   stats.micros = db_options_.env->NowMicros() - start_micros;
   stats.bytes_written = meta_.fd.GetFileSize();
   MeasureTime(stats_, FLUSH_TIME, stats.micros);
-  cfd_->internal_stats()->AddCompactionStats(0 /* level */, stats);
+  cfd_->internal_stats()->AddCompactionStats(0 /* level */, thread_pri_, stats);
   cfd_->internal_stats()->AddCFStats(InternalStats::BYTES_FLUSHED,
                                      meta_.fd.GetFileSize());
   RecordFlushIOStats();

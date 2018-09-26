@@ -210,14 +210,12 @@ TEST_F(RangeDelAggregatorTest, GapsBetweenRanges) {
 
 TEST_F(RangeDelAggregatorTest, IdenticalSameSeqNo) {
   VerifyRangeDels({{"a", "b", 5}, {"a", "b", 5}},
-                  {{" ", 0}, {"a", 5}, {"b", 0}},
-                  {{"a", "b", 5}});
+                  {{" ", 0}, {"a", 5}, {"b", 0}}, {{"a", "b", 5}});
 }
 
 TEST_F(RangeDelAggregatorTest, ContiguousSameSeqNo) {
   VerifyRangeDels({{"a", "b", 5}, {"b", "c", 5}},
-                  {{" ", 0}, {"a", 5}, {"b", 5}, {"c", 0}},
-                  {{"a", "c", 5}});
+                  {{" ", 0}, {"a", 5}, {"b", 5}, {"c", 0}}, {{"a", "c", 5}});
 }
 
 TEST_F(RangeDelAggregatorTest, OverlappingSameSeqNo) {

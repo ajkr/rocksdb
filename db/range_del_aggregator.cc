@@ -272,7 +272,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
       end_seq = prev_seq();
       Rep::iterator pit;
       if (it != rep_.begin() && (pit = std::prev(it)) != rep_.begin() &&
-          ucmp_->Compare(pit->first, t.start_key_) == 0 && std::prev(pit)->second == t.seq_) {
+          ucmp_->Compare(pit->first, t.start_key_) == 0 &&
+          std::prev(pit)->second == t.seq_) {
         // The new tombstone starts at the end of an existing tombstone with an
         // identical seqno:
         //
@@ -285,7 +286,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
       } else {
         // Insert a new transition at the new tombstone's start point, or raise
         // the existing transition at that point to the new tombstone's seqno.
-        rep_[t.start_key_] = t.seq_;  // operator[] will overwrite existing entry
+        rep_[t.start_key_] =
+            t.seq_;  // operator[] will overwrite existing entry
       }
     } else {
       // The new tombstone's start point is covered by an existing tombstone:
@@ -343,12 +345,14 @@ class CollapsedRangeDelMap : public RangeDelMap {
 
     if (t.seq_ == prev_seq()) {
       // The new tombstone is unterminated in the map.
-      if (it != rep_.end() && t.seq_ == it->second && ucmp_->Compare(it->first, t.end_key_) == 0) {
+      if (it != rep_.end() && t.seq_ == it->second &&
+          ucmp_->Compare(it->first, t.end_key_) == 0) {
         // The new tombstone ends at the start of another tombstone with an
         // identical seqno. Merge the tombstones by removing the existing
         // tombstone's start key.
         rep_.erase(it);
-      } else if (end_seq == prev_seq() || (it != rep_.end() && end_seq == it->second)) {
+      } else if (end_seq == prev_seq() ||
+                 (it != rep_.end() && end_seq == it->second)) {
         // The new tombstone is implicitly ended because its end point is
         // contained within an existing tombstone with the same seqno:
         //
@@ -363,7 +367,8 @@ class CollapsedRangeDelMap : public RangeDelMap {
         // Install one that returns to the last seqno we covered. Because end
         // keys are exclusive, if there's an existing transition at t.end_key_,
         // it takes precedence over the transition that we install here.
-        rep_.emplace(t.end_key_, end_seq);  // emplace is a noop if existing entry
+        rep_.emplace(t.end_key_,
+                     end_seq);  // emplace is a noop if existing entry
       }
     } else {
       // The new tombstone is implicitly ended because its end point is covered

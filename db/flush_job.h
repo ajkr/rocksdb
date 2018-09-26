@@ -66,7 +66,8 @@ class FlushJob {
            SnapshotChecker* snapshot_checker, JobContext* job_context,
            LogBuffer* log_buffer, Directory* db_directory,
            Directory* output_file_directory, CompressionType output_compression,
-           Statistics* stats, EventLogger* event_logger, bool measure_io_stats);
+           Statistics* stats, EventLogger* event_logger, bool measure_io_stats,
+           Env::Priority thread_pri);
 
   ~FlushJob();
 
@@ -110,6 +111,7 @@ class FlushJob {
   VersionEdit* edit_;
   Version* base_;
   bool pick_memtable_called;
+  Env::Priority thread_pri_;
 };
 
 }  // namespace rocksdb
