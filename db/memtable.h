@@ -391,7 +391,7 @@ class MemTable {
   ConcurrentArena arena_;
   unique_ptr<MemTableRep> table_;
   unique_ptr<MemTableRep> range_del_table_;
-  bool is_range_del_table_empty_;
+  std::atomic_bool is_range_del_table_empty_;
 
   // Total data size of all data inserted
   std::atomic<uint64_t> data_size_;
