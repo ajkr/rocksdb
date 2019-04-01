@@ -992,6 +992,56 @@ TEST_F(ExternalSSTFileTest, SkipSnapshot) {
   db_->ReleaseSnapshot(s2);
 }
 
+TEST_F(ExternalSSTFileTest, IngestMultipleHardLinksSingleFile) {
+  // Background:
+  // - Multiple hardlinks have the same result of `GetUniqueId()` if they point
+  //   to the same file.
+  // - When `move_files == true` and `write_global_seqno == false`,
+  //   `GetUniqueId()` on the file is the same before and after the file is
+  //   ingested to the DB.
+  // - Block cache handles incorporate `GetUniqueId()` to avoid conflict across
+  //   files.
+  //
+  // Problem:
+  // If we ingest two hardlinks for the same file using `move_files == true` and
+  // `write_global_seqno == false`, the second job got a validation failure
+  // saying some keys had nonzero seqnum. That was because the validation logic
+  // went through block cache, and due to the conflicting cache handles, we
+  // could see the first file's data blocks when validating the second file.
+  Options options = CurrentOptions();
+  std::string external_file_path;
+  std::vector<std::pair<std::string, std::string>> keys_and_vals = {{"k", "v"}};
+  ASSERT_OK(GenerateOneExternalFile(
+        options, dbfull()->DefaultColumnFamily(), keys_and_vals,
+        0 /* file_id */, false /* sort_data */, &external_file_path,
+        nullptr /* true_data */));
+
+  // Some initial data so the file won't be ingested with seqnum zero.
+  ASSERT_OK(Put("k", "v"));
+
+  std::vector<std::string> targets = {external_file_path + ".1",
+                                      external_file_path + ".2"};
+  for (const std::string& target : targets) {
+    ASSERT_OK(env_->LinkFile(external_file_path, target));
+  }
+
+  // First ingest should succeed
+  IngestExternalFileOptions ingest_opts;
+  ingest_opts.allow_global_seqno = true;
+  ingest_opts.write_global_seqno = false;
+  ingest_opts.move_files = true;
+  ASSERT_OK(db_->IngestExternalFile({targets[0]}, ingest_opts));
+
+  // Now populate the block cache with the file's data blocks. If the second
+  // ingest's validation looks at data blocks in block cache (which is easy to
+  // do mistakenly since the second ingested file is identical to the first),
+  // it'll see keys with nonzero seqnums and error out.
+  ASSERT_EQ(Get("k"), "v");
+
+  // Second ingest should succeed.
+  ASSERT_OK(db_->IngestExternalFile({targets[1]}, ingest_opts));
+}
+
 TEST_F(ExternalSSTFileTest, MultiThreaded) {
   // Bulk load 10 files every file contain 1000 keys
   int num_files = 10;
