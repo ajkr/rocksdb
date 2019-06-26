@@ -2228,7 +2228,7 @@ class StressTest {
                         lock);
       } else {
         // OPERATION iterate
-        TestIterate(thread, read_opts, rand_column_families, rand_keys);
+        TestIterate(thread, read_opts, rand_column_families, rand_keys, lock);
       }
       thread->stats.FinishedSingleOp();
     }
@@ -2289,10 +2289,10 @@ class StressTest {
 
   // Given a key K, this creates an iterator which scans to K and then
   // does a random sequence of Next/Prev operations.
-  virtual Status TestIterate(ThreadState* thread,
-      const ReadOptions& read_opts,
-      const std::vector<int>& rand_column_families,
-      const std::vector<int64_t>& rand_keys) {
+  virtual Status TestIterate(ThreadState* thread, const ReadOptions& read_opts,
+                             const std::vector<int>& rand_column_families,
+                             const std::vector<int64_t>& rand_keys,
+                             std::unique_ptr<MutexLock>& /*lock*/) {
     Status s;
     const Snapshot* snapshot = db_->GetSnapshot();
     ReadOptions readoptionscopy = read_opts;
@@ -3289,13 +3289,102 @@ class NonBatchedOpsStressTest : public StressTest {
     return s;
   }
 
-  virtual Status TestDeleteRange(ThreadState* thread,
-      WriteOptions& write_opts,
-      const std::vector<int>& rand_column_families,
-      const std::vector<int64_t>& rand_keys,
-      std::unique_ptr<MutexLock>& lock) {
+  // Given a key K, this creates an iterator which scans to K and then
+  // does a random sequence of Next/Prev operations.
+  virtual Status TestIterate(ThreadState* thread, const ReadOptions& read_opts,
+                             const std::vector<int>& rand_column_families,
+                             const std::vector<int64_t>& rand_keys,
+                             std::unique_ptr<MutexLock>& lock) override {
+    // Lock the whole range over which we might iterate to ensure it doesn't
+    // change under us.
+    std::vector<std::unique_ptr<MutexLock> > range_locks;
+    int64_t rand_key = rand_keys[0];
+    int rand_column_family = rand_column_families[0];
+    auto shared = thread->shared;
+    int64_t max_key = shared->GetMaxKey();
+    if (static_cast<uint64_t>(rand_key) > max_key - FLAGS_num_iterations) {
+      lock.reset();
+      rand_key = thread->rand.Next() % (max_key - FLAGS_num_iterations + 1);
+      range_locks.emplace_back(
+          new MutexLock(shared->GetMutexForKey(rand_column_family, rand_key)));
+    } else {
+      range_locks.emplace_back(std::move(lock));
+    }
+    for (int j = 1; j < static_cast<int>(FLAGS_num_iterations); ++j) {
+      if (((rand_key + j) & ((1 << FLAGS_log2_keys_per_lock) - 1)) == 0) {
+        range_locks.emplace_back(new MutexLock(
+            shared->GetMutexForKey(rand_column_family, rand_key + j)));
+      }
+    }
+    // Locks acquired for [rand_key, rand_key+FLAGS_num_iterations).
+    std::string key_str = Key(rand_key);
+    Slice key = key_str;
+    auto cfh = column_families_[rand_column_family];
+    ReadOptions readoptscopy(read_opts);
+    readoptscopy.total_order_seek = true;
+    std::unique_ptr<Iterator> iter(db_->NewIterator(readoptscopy, cfh));
+    iter->Seek(key);
+    for (uint64_t i = 0; i < FLAGS_num_iterations && iter->Valid(); i++) {
+      uint64_t curr;
+      GetIntVal(iter->key().ToString(), &curr);
+      if (curr < static_cast<uint64_t>(rand_key)) {
+        iter->Next();
+      } else if (curr >=
+                 static_cast<uint64_t>(rand_key) + FLAGS_num_iterations) {
+        iter->Prev();
+      } else {
+        uint32_t expected_value =
+            shared->Value(rand_column_family, curr).load();
+        if (expected_value == shared->DELETION_SENTINEL) {
+          fprintf(stderr, "missing expected key %" PRIu64 "\n", curr);
+          exit(1);
+        }
+        if (thread->rand.OneIn(2)) {
+          iter->Next();
+          if (!iter->Valid()) {
+            break;
+          }
+          uint64_t next;
+          GetIntVal(iter->key().ToString(), &next);
+          for (uint64_t j = curr + 1;
+               j < std::min(next, static_cast<uint64_t>(rand_key) +
+                                      FLAGS_num_iterations);
+               ++j) {
+            expected_value = shared->Value(rand_column_family, j).load();
+            if (expected_value != shared->DELETION_SENTINEL &&
+                expected_value != shared->UNKNOWN_SENTINEL) {
+              fprintf(stderr, "found unexpected key %" PRIu64 "\n", j);
+              exit(1);
+            }
+          }
+        } else {
+          iter->Prev();
+          if (!iter->Valid()) {
+            break;
+          }
+          uint64_t prev;
+          GetIntVal(iter->key().ToString(), &prev);
+          for (uint64_t j = std::max(prev + 1, static_cast<uint64_t>(rand_key));
+               j < curr; ++j) {
+            expected_value = shared->Value(rand_column_family, j).load();
+            if (expected_value != shared->DELETION_SENTINEL &&
+                expected_value != shared->UNKNOWN_SENTINEL) {
+              fprintf(stderr, "found unexpected key %" PRIu64 "\n", j);
+              exit(1);
+            }
+          }
+        }
+      }
+    }
+    return Status::OK();
+  }
+
+  virtual Status TestDeleteRange(ThreadState* thread, WriteOptions& write_opts,
+                                 const std::vector<int>& rand_column_families,
+                                 const std::vector<int64_t>& rand_keys,
+                                 std::unique_ptr<MutexLock>& lock) {
     // OPERATION delete range
-    std::vector<std::unique_ptr<MutexLock>> range_locks;
+    std::vector<std::unique_ptr<MutexLock> > range_locks;
     // delete range does not respect disallowed overwrites. the keys for
     // which overwrites are disallowed are randomly distributed so it
     // could be expensive to find a range where each key allows
