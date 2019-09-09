@@ -382,6 +382,12 @@ DEFINE_int32(compact_files_one_in, 0,
              "If non-zero, then CompactFiles() will be called one for every N "
              "operations IN AVERAGE.  0 indicates CompactFiles() is disabled.");
 
+DEFINE_int32(compact_range_one_in, 0,
+             "If non-zero, then CompactRange() will be called one for every N "
+             "operations IN AVERAGE.  0 indicates CompactRange() is disabled.");
+
+DEFINE_int32(compact_range_width, 1000, "");
+
 DEFINE_int32(acquire_snapshot_one_in, 0,
              "If non-zero, then acquires a snapshot once every N operations on "
              "average.");
@@ -1067,10 +1073,10 @@ class DbStressListener : public EventListener {
     VerifyFilePath(info.file_path);
     assert(info.job_id > 0 || FLAGS_compact_files_one_in > 0);
     if (info.status.ok()) {
-      assert(info.file_size > 0);
-      assert(info.table_properties.data_size > 0);
-      assert(info.table_properties.raw_key_size > 0);
-      assert(info.table_properties.num_entries > 0);
+      //assert(info.file_size > 0);
+      //assert(info.table_properties.data_size > 0);
+      //assert(info.table_properties.raw_key_size > 0);
+      //assert(info.table_properties.num_entries > 0);
     }
   }
 
@@ -1923,7 +1929,59 @@ class StressTest {
 
       if (FLAGS_ingest_external_file_one_in > 0 &&
           thread->rand.Uniform(FLAGS_ingest_external_file_one_in) == 0) {
-        TestIngestExternalFile(thread, {rand_column_family}, {rand_key}, lock);
+				const std::string sst_filename =
+						FLAGS_db + "/." + ToString(thread->tid) + ".sst";
+				Status s;
+				if (FLAGS_env->FileExists(sst_filename).ok()) {
+					// Maybe we terminated abnormally before, so cleanup to give this file
+					// ingestion a clean slate
+					s = FLAGS_env->DeleteFile(sst_filename);
+				}
+
+				SstFileWriter sst_file_writer(EnvOptions(), options_);
+				if (s.ok()) {
+					s = sst_file_writer.Open(sst_filename);
+				}
+				std::vector<std::unique_ptr<MutexLock> > range_locks;
+				std::vector<uint32_t> values;
+
+				// Grab locks, set pending state on expected values, and add keys
+				for (int64_t key_num = rand_key;
+						 s.ok() && key_num < std::min(rand_key + FLAGS_ingest_external_file_width,
+																			shared->GetMaxKey());
+						 ++key_num) {
+					if (key_num == rand_key) {
+						range_locks.emplace_back(std::move(l));
+					} else if ((key_num & ((1 << FLAGS_log2_keys_per_lock) - 1)) == 0) {
+						range_locks.emplace_back(
+								new MutexLock(shared->GetMutexForKey(rand_column_family, key_num)));
+					}
+
+					uint32_t value_base = thread->rand.Next() % shared->SENTINEL;
+					values.push_back(value_base);
+					shared->Put(rand_column_family, key_num, value_base);
+
+					size_t value_len = GenerateValue(value_base, value, sizeof(value));
+					auto key_str = Key(key_num);
+					s = sst_file_writer.Put(Slice(key_str), Slice(value, value_len));
+				}
+
+				if (s.ok()) {
+					s = sst_file_writer.Finish();
+				}
+				if (s.ok()) {
+					s = db_->IngestExternalFile(column_families_[rand_column_family],
+																			{sst_filename}, IngestExternalFileOptions());
+				}
+				if (!s.ok()) {
+					fprintf(stderr, "file ingestion error: %s\n", s.ToString().c_str());
+					std::terminate();
+				}
+				int64_t key_num = rand_key;
+				for (int64_t value_num : values) {
+					shared->Put(rand_column_family, key_num, value_num);
+					++key_num;
+				}
       }
 
       if (FLAGS_acquire_snapshot_one_in > 0 &&
@@ -2145,19 +2203,13 @@ class StressTest {
         // OPERATION delete range
         if (!FLAGS_test_batches_snapshots) {
           std::vector<std::unique_ptr<MutexLock>> range_locks;
-          // delete range does not respect disallowed overwrites. the keys for
-          // which overwrites are disallowed are randomly distributed so it
-          // could be expensive to find a range where each key allows
-          // overwrites.
-          if (rand_key > max_key - FLAGS_range_deletion_width) {
-            l.reset();
-            rand_key = thread->rand.Next() %
-                       (max_key - FLAGS_range_deletion_width + 1);
-            range_locks.emplace_back(new MutexLock(
-                shared->GetMutexForKey(rand_column_family, rand_key)));
-          } else {
-            range_locks.emplace_back(std::move(l));
-          }
+          l.reset();
+          // pick a new start key to not follow `active_width` such that range tombstones
+          // may be completely before or completely after the keys in the memtable
+          rand_key = thread->rand.Next() %
+                     (max_key - FLAGS_range_deletion_width + 1);
+          range_locks.emplace_back(new MutexLock(
+              shared->GetMutexForKey(rand_column_family, rand_key)));
           for (int j = 1; j < FLAGS_range_deletion_width; ++j) {
             if (((rand_key + j) & ((1 << FLAGS_log2_keys_per_lock) - 1)) == 0) {
               range_locks.emplace_back(new MutexLock(
@@ -2430,9 +2482,12 @@ class StressTest {
     block_based_options.block_size = FLAGS_block_size;
     block_based_options.format_version = 2;
     block_based_options.filter_policy = filter_policy_;
+    options_.avoid_flush_during_shutdown = true;
+    options_.level_compaction_dynamic_level_bytes = true;
     options_.table_factory.reset(
         NewBlockBasedTableFactory(block_based_options));
     options_.db_write_buffer_size = FLAGS_db_write_buffer_size;
+    options_.force_consistency_checks = false;
     options_.write_buffer_size = FLAGS_write_buffer_size;
     options_.max_write_buffer_number = FLAGS_max_write_buffer_number;
     options_.min_write_buffer_number_to_merge =
@@ -2789,5 +2844,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 }
+
+
 
 #endif  // GFLAGS

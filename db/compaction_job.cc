@@ -178,10 +178,10 @@ struct CompactionJob::SubcompactionState {
       if (seen_key) {
         overlapped_bytes += grandparents[grandparent_index]->fd.GetFileSize();
       }
-      assert(grandparent_index + 1 >= grandparents.size() ||
-             icmp->Compare(
-                 grandparents[grandparent_index]->largest.Encode(),
-                 grandparents[grandparent_index + 1]->smallest.Encode()) <= 0);
+      //assert(grandparent_index + 1 >= grandparents.size() ||
+             //icmp->Compare(
+                 //grandparents[grandparent_index]->largest.Encode(),
+                 //grandparents[grandparent_index + 1]->smallest.Encode()) <= 0);
       grandparent_index++;
     }
     seen_key = true;

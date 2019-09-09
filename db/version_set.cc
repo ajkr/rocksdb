@@ -1769,7 +1769,7 @@ void VersionStorageInfo::AddFile(int level, FileMetaData* f, Logger* info_log) {
             f2->largest.DebugString(true).c_str());
       LogFlush(info_log);
     }
-    assert(false);
+    //assert(false);
   }
 #endif
   f->refs++;

@@ -143,13 +143,11 @@ class VersionBuilder::Rep {
   }
 
   void CheckConsistency(VersionStorageInfo* vstorage) {
-#ifdef NDEBUG
     if (!vstorage->force_consistency_checks()) {
       // Dont run consistency checks in release mode except if
       // explicitly asked to
       return;
     }
-#endif
     // make sure the files are sorted correctly
     for (int level = 0; level < num_levels_; level++) {
       auto& level_files = vstorage->LevelFiles(level);
