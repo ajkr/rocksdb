@@ -2310,30 +2310,6 @@ TEST_P(DBIteratorTest, SeekAfterHittingManyInternalKeys) {
   ASSERT_EQ(iter2->value().ToString(), "val_6");
 }
 
-TEST_P(DBIteratorTest, SeekBackwardAfterOutOfUpperBound) {
-  Put("a", "");
-  Put("b", "");
-  Flush();
-
-  ReadOptions ropt;
-  Slice ub = "b";
-  ropt.iterate_upper_bound = &ub;
-
-  std::unique_ptr<Iterator> it(dbfull()->NewIterator(ropt));
-  it->SeekForPrev("a");
-  ASSERT_TRUE(it->Valid());
-  ASSERT_OK(it->status());
-  ASSERT_EQ("a", it->key().ToString());
-  it->Next();
-  ASSERT_FALSE(it->Valid());
-  ASSERT_OK(it->status());
-  it->SeekForPrev("a");
-  ASSERT_OK(it->status());
-
-  ASSERT_TRUE(it->Valid());
-  ASSERT_EQ("a", it->key().ToString());
-}
-
 INSTANTIATE_TEST_CASE_P(DBIteratorTestInstance, DBIteratorTest,
                         testing::Values(true, false));
 

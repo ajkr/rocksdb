@@ -1780,7 +1780,6 @@ bool BlockBasedTable::PrefixMayMatch(const Slice& internal_key) {
 }
 
 void BlockBasedTableIterator::Seek(const Slice& const_target) {
-  is_out_of_bound_ = false;
   Slice target(const_target);
   if (!CheckPrefixMayMatch(target)) {
     ResetDataIter();
@@ -1814,7 +1813,6 @@ void BlockBasedTableIterator::Seek(const Slice& const_target) {
 }
 
 void BlockBasedTableIterator::SeekForPrev(const Slice& const_target) {
-  is_out_of_bound_ = false;
   Slice target(const_target);
   if (!CheckPrefixMayMatch(target)) {
     ResetDataIter();
@@ -1865,7 +1863,6 @@ void BlockBasedTableIterator::SeekForPrev(const Slice& const_target) {
 }
 
 void BlockBasedTableIterator::SeekToFirst() {
-  is_out_of_bound_ = false;
   SavePrevIndexValue();
   index_iter_->SeekToFirst();
   if (!index_iter_->Valid()) {
@@ -1881,7 +1878,6 @@ void BlockBasedTableIterator::SeekToFirst() {
 }
 
 void BlockBasedTableIterator::SeekToLast() {
-  is_out_of_bound_ = false;
   SavePrevIndexValue();
   index_iter_->SeekToLast();
   if (!index_iter_->Valid()) {
@@ -1953,7 +1949,7 @@ void BlockBasedTableIterator::FindKeyForward() {
   // a call to Seek, SeekToFirst or Next) and we're looking for the next valid
   // key.
 
-  assert(!is_out_of_bound_);
+  is_out_of_bound_ = false;
   for (;;) {
     // TODO the while loop inherits from two-level-iterator. We don't know
     // whether a block can be empty so it can be replaced by an "if".
@@ -2050,7 +2046,6 @@ void BlockBasedTableIterator::FindKeyBackward() {
   // (via a call to SeekForPrev, SeekToLast or Prev) and we're looking for the
   // next valid key.
 
-  assert(!is_out_of_bound_);
   for (;;) {
     while (!data_block_iter_.Valid()) {
       if (!data_block_iter_.status().ok()) {
