@@ -338,6 +338,9 @@ DEFINE_bool(disable_wal, false, "If true, do not write WAL for write.");
 DEFINE_int64(target_file_size_base, rocksdb::Options().target_file_size_base,
              "Target level-1 file size for compaction");
 
+DEFINE_int64(max_compaction_bytes, rocksdb::Options().max_compaction_bytes,
+             "mcb");
+
 DEFINE_int32(target_file_size_multiplier, 1,
              "A multiplier to compute target level-N file size (N >= 2)");
 
@@ -2483,6 +2486,7 @@ class StressTest {
     block_based_options.format_version = 2;
     block_based_options.filter_policy = filter_policy_;
     options_.avoid_flush_during_shutdown = true;
+    options_.max_compaction_bytes = FLAGS_max_compaction_bytes;
     options_.level_compaction_dynamic_level_bytes = true;
     options_.table_factory.reset(
         NewBlockBasedTableFactory(block_based_options));
