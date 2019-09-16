@@ -1521,6 +1521,76 @@ TEST_F(DBRangeDelTest, RangeTombstoneWrittenToMinimalSsts) {
   ASSERT_EQ(1, num_range_deletions);
 }
 
+TEST_F(DBRangeDelTest, CompactionOutputsRangeDelsBetweenSsts) {
+  const int kNumUpperFiles = 5;
+  const int kNumBottomFiles = 100;
+  const int kNumKeysPerBottomFile = 10;
+  const int kValueBytes = 128;
+
+  Options options = CurrentOptions();
+  options.level0_file_num_compaction_trigger = kNumUpperFiles;
+  options.num_levels = 3;
+  options.max_compaction_bytes = 1;
+  options.compression = kNoCompression;
+  Reopen(options);
+
+  // Lay a foundation of large KVs in L2. This ensures when we do an L0->L1
+  // compaction later the output files can be split by `max_compaction_bytes`.
+  Random rnd(301);
+  for (int i = 0; i < kNumBottomFiles; ++i) {
+    for (int j = 0; j < kNumKeysPerBottomFile; ++j) {
+      std::string value = RandomString(&rnd, kValueBytes);
+      ASSERT_OK(Put(Key(i * kNumKeysPerBottomFile + j), value));
+    }
+    db_->Flush(FlushOptions());
+    MoveFilesToLevel(2);
+  }
+  ASSERT_EQ(0, NumTableFilesAtLevel(0));
+  ASSERT_EQ(kNumBottomFiles, NumTableFilesAtLevel(2));
+  auto* snapshot = db_->GetSnapshot();
+
+  // Partition the space of existing keys. Each L1 file will cover one partition:
+  // a point key at `base` followed by range tombstones in the rest of the partition.
+  const int kPartitionWidth = kNumBottomFiles * kNumKeysPerBottomFile / kNumUpperFiles;
+  for (int i = 0; i < kNumUpperFiles; ++i) {
+    int base = i * kPartitionWidth;
+    ASSERT_OK(db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(),
+                               Key(base + 1), Key(base + kPartitionWidth)));
+    std::string value = RandomString(&rnd, kValueBytes);
+    ASSERT_OK(Put(Key(base), value));
+    db_->Flush(FlushOptions());
+  }
+  dbfull()->TEST_WaitForCompact();
+  ASSERT_EQ(0, NumTableFilesAtLevel(0));
+  ASSERT_EQ(kNumUpperFiles, NumTableFilesAtLevel(1));
+  ASSERT_EQ(kNumBottomFiles, NumTableFilesAtLevel(2));
+
+  auto verifyDb = [&]() {
+    ReadOptions read_opts;
+    auto* iter = db_->NewIterator(read_opts);
+    iter->SeekToFirst();
+    for (int i = 0; i < kNumUpperFiles; ++i) {
+      // Only the base key of each partition should be visible
+      int base = i * kPartitionWidth;
+      ASSERT_TRUE(iter->Valid());
+      ASSERT_EQ(Key(base), iter->key());
+      iter->Next();
+    }
+    ASSERT_FALSE(iter->Valid());
+    delete iter;
+  };
+
+  verifyDb();
+  CompactRangeOptions cro;
+  std::string beginString = Key(0);
+  std::string endString = Key(0);
+  Slice beginSlice(beginString);
+  Slice endSlice(endString);
+  ASSERT_OK(db_->CompactRange(cro, &beginSlice, &endSlice));
+  verifyDb();
+  db_->ReleaseSnapshot(snapshot);
+}
+
 #endif  // ROCKSDB_LITE
 
 }  // namespace rocksdb
