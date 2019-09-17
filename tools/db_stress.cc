@@ -675,6 +675,14 @@ namespace rocksdb {
 
 // convert long to a big-endian slice key
 static std::string Key(int64_t val) {
+  char key_ts;
+  // Last three bits are timestamp
+  if ((val & 7) == 0) {
+    key_ts = 0;
+  } else {
+    key_ts = 8 - (val & 7);
+  }
+  val >>= 3;
   std::string little_endian_key;
   std::string big_endian_key;
   PutFixed64(&little_endian_key, val);
@@ -682,6 +690,13 @@ static std::string Key(int64_t val) {
   big_endian_key.resize(sizeof(val));
   for (size_t i = 0 ; i < sizeof(val); ++i) {
     big_endian_key[i] = little_endian_key[sizeof(val) - 1 - i];
+  }
+  if (key_ts == 0) {
+    big_endian_key.append(1, '\0');
+  } else {
+    for (int i = 0; i < 2; ++i) {
+      big_endian_key.append(1, key_ts);
+    }
   }
   return big_endian_key;
 }
@@ -2611,6 +2626,52 @@ class StressTest {
     fprintf(stdout, "------------------------------------------------\n");
   }
 
+  class TimestampComparator : public Comparator {
+   public:
+    virtual const char* Name() const override {
+      return "TimestampComparator";
+    }
+
+    virtual void FindShortestSeparator(std::string* /*start*/, const Slice& /*limit*/) const override {
+      return;
+    }
+
+    virtual void FindShortSuccessor(std::string* /*key*/) const override {
+      return;
+    }
+
+    virtual int Compare(const Slice& a_const, const Slice& b_const) const override {
+      Slice a(a_const), b(b_const);
+      if (a.size() < 2 || b.size() < 2) {
+        return a.compare(b);
+      }
+      bool a_zero_ts = *(a.data() + a.size() - 1) == '\0';
+      bool b_zero_ts = *(b.data() + b.size() - 1) == '\0';
+      Slice a_ts, b_ts;
+      if (!a_zero_ts) {
+        a_ts = Slice(a.data() + a.size() - 2, 2);
+      }
+      a.remove_suffix(a_zero_ts ? 1 : 2);
+      if (!b_zero_ts) {
+        b_ts = Slice(b.data() + b.size() - 2, 2);
+      }
+      b.remove_suffix(b_zero_ts ? 1 : 2);
+
+      int cmp = a.compare(b);
+      if (cmp != 0) {
+        return cmp;
+      }
+      if (a_zero_ts && b_zero_ts) {
+        return 0;
+      } else if (a_zero_ts) {
+        return -1;
+      } else if (b_zero_ts) {
+        return 1;
+      }
+      return b_ts.compare(a_ts);
+    }
+  };
+
   void Open() {
     assert(db_ == nullptr);
 #ifndef ROCKSDB_LITE
@@ -2629,6 +2690,7 @@ class StressTest {
       block_based_options.index_block_restart_interval =
           static_cast<int32_t>(FLAGS_index_block_restart_interval);
       block_based_options.filter_policy = filter_policy_;
+      options_.comparator = new TimestampComparator();
       options_.table_factory.reset(
           NewBlockBasedTableFactory(block_based_options));
       options_.db_write_buffer_size = FLAGS_db_write_buffer_size;
@@ -2948,12 +3010,13 @@ class NonBatchedOpsStressTest : public StressTest {
           Slice k = keystr;
           Status s = iter->status();
           if (iter->Valid()) {
-            if (iter->key().compare(k) > 0) {
+            int cmp = options_.comparator->Compare(iter->key(), k);
+            if (cmp > 0) {
               s = Status::NotFound(Slice());
-            } else if (iter->key().compare(k) == 0) {
+            } else if (cmp == 0) {
               from_db = iter->value().ToString();
               iter->Next();
-            } else if (iter->key().compare(k) < 0) {
+            } else if (cmp < 0) {
               VerificationAbort(shared, "An out of range key was found",
                                 static_cast<int>(cf), i);
             }
