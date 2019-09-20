@@ -500,15 +500,20 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
   if (!ok()) return;
   ValueType value_type = ExtractValueType(key);
   if (IsValueType(value_type)) {
-    if (r->props.num_entries > r->props.num_range_deletions) {
-      if (r->internal_comparator.Compare(key, Slice(r->last_key)) <= 0) {
-        // We were about to insert keys out of order. Abort.
-        ROCKS_LOG_ERROR(r->ioptions.info_log,
-                        "Out-of-order key insertion into block based table");
-        r->status =
-            Status::Corruption("Out-of-order key insertion into table");
-        return;
+    added_keys_.emplace_back(key.ToString(true /* hex */));
+    if (r->internal_comparator.Compare(key, Slice(r->last_key)) <= 0) {
+      for (const auto& added_key : added_keys_) {
+        ROCKS_LOG_ERROR(r->ioptions.info_log, "added key: %s",
+                        added_key.c_str());
       }
+      ROCKS_LOG_ERROR(r->ioptions.info_log, "last key: %s",
+          Slice(r->last_key).ToString(true /* hex */).c_str());
+      // We were about to insert keys out of order. Abort.
+      ROCKS_LOG_FATAL(r->ioptions.info_log,
+                      "Out-of-order key insertion into block based table");
+      r->status =
+          Status::Corruption("Out-of-order key insertion into table");
+      return;
     }
 
     auto should_flush = r->flush_block_policy->Update(key, value);

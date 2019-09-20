@@ -38,14 +38,16 @@ CompactionIterator::CompactionIterator(
     CompactionRangeDelAggregator* range_del_agg, const Compaction* compaction,
     const CompactionFilter* compaction_filter,
     const std::atomic<bool>* shutting_down,
-    const SequenceNumber preserve_deletes_seqnum)
+    const SequenceNumber preserve_deletes_seqnum,
+    Logger* info_log /* = nullptr */)
     : CompactionIterator(
           input, cmp, merge_helper, last_sequence, snapshots,
           earliest_write_conflict_snapshot, snapshot_checker, env,
           report_detailed_time, expect_valid_internal_key, range_del_agg,
           std::unique_ptr<CompactionProxy>(
               compaction ? new CompactionProxy(compaction) : nullptr),
-          compaction_filter, shutting_down, preserve_deletes_seqnum) {}
+          compaction_filter, shutting_down, preserve_deletes_seqnum,
+          info_log) {}
 
 CompactionIterator::CompactionIterator(
     InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
@@ -57,7 +59,8 @@ CompactionIterator::CompactionIterator(
     std::unique_ptr<CompactionProxy> compaction,
     const CompactionFilter* compaction_filter,
     const std::atomic<bool>* shutting_down,
-    const SequenceNumber preserve_deletes_seqnum)
+    const SequenceNumber preserve_deletes_seqnum,
+    Logger* info_log /* = nullptr */)
     : input_(input),
       cmp_(cmp),
       merge_helper_(merge_helper),
@@ -75,7 +78,8 @@ CompactionIterator::CompactionIterator(
       current_user_key_sequence_(0),
       current_user_key_snapshot_(0),
       merge_out_iter_(merge_helper_),
-      current_key_committed_(false) {
+      current_key_committed_(false),
+      info_log_(info_log) {
   assert(compaction_filter_ == nullptr || compaction_ != nullptr);
   assert(snapshots_ != nullptr);
   bottommost_level_ =
@@ -156,7 +160,7 @@ void CompactionIterator::Next() {
     // Only advance the input iterator if there is no merge output and the
     // iterator is not already at the next record.
     if (!at_next_) {
-      input_->Next();
+      InputNext();
     }
     NextFromInput();
   }
@@ -222,10 +226,24 @@ void CompactionIterator::InvokeFilterIfNeeded(bool* need_skip,
   }
 }
 
+void CompactionIterator::InputNext() {
+  input_->Next();
+  if (input_->Valid()) {
+    InternalKeyComparator icmp(cmp_);
+    if (!prev_key_.empty() && icmp.Compare(Slice(prev_key_), input_->key()) > 0) {
+      ROCKS_LOG_ERROR(info_log_, "prev_key=%s", Slice(prev_key_).ToString(true /* hex */).c_str());
+      ROCKS_LOG_ERROR(info_log_, "input_->key()=%s", input_->key().ToString(true /* hex */).c_str());
+      ROCKS_LOG_FATAL(info_log_, "internal iter out of order");
+    };
+    prev_key_ = input_->key().ToString();
+  }
+}
+
 void CompactionIterator::NextFromInput() {
   at_next_ = false;
   valid_ = false;
 
+  std::string prev_key;
   while (!valid_ && input_->Valid() && !IsShuttingDown()) {
     key_ = input_->key();
     value_ = input_->value();
@@ -246,9 +264,14 @@ void CompactionIterator::NextFromInput() {
       current_user_key_snapshot_ = 0;
       iter_stats_.num_input_corrupt_records++;
       valid_ = true;
+      ROCKS_LOG_FATAL(info_log_, "corrupt key: %s", key_.ToString(true /* hex */).c_str());
       break;
     }
     TEST_SYNC_POINT_CALLBACK("CompactionIterator:ProcessKV", &ikey_);
+    if (!prev_key.empty() && cmp_->Compare(Slice(prev_key), ikey_.user_key) > 0) {
+      ROCKS_LOG_FATAL(info_log_, "NextFromInput out-of-order: %s %s", Slice(prev_key).ToString(true /* hex */).c_str(), ikey_.user_key.ToString(true /* hex */).c_str());
+    }
+    prev_key = ikey_.user_key.ToString();
 
     // Update input statistics
     if (ikey_.type == kTypeDeletion || ikey_.type == kTypeSingleDeletion) {
@@ -375,7 +398,7 @@ void CompactionIterator::NextFromInput() {
       // The easiest way to process a SingleDelete during iteration is to peek
       // ahead at the next key.
       ParsedInternalKey next_ikey;
-      input_->Next();
+      InputNext();
 
       // Check whether the next key exists, is not corrupt, and is the same key
       // as the single delete.
@@ -416,7 +439,7 @@ void CompactionIterator::NextFromInput() {
             ++iter_stats_.num_record_drop_obsolete;
             // Already called input_->Next() once.  Call it a second time to
             // skip past the second key.
-            input_->Next();
+            InputNext();
           } else {
             // Found a matching value, but we cannot drop both keys since
             // there is an earlier snapshot and we need to leave behind a record
@@ -492,7 +515,7 @@ void CompactionIterator::NextFromInput() {
                   SnapshotCheckerResult::kNotInSnapshot));
 
       ++iter_stats_.num_record_drop_hidden;  // (A)
-      input_->Next();
+      InputNext();
     } else if (compaction_ != nullptr && ikey_.type == kTypeDeletion &&
                IN_EARLIEST_SNAPSHOT(ikey_.sequence) &&
                ikeyNotNeededForIncrementalSnapshot() &&
@@ -521,21 +544,21 @@ void CompactionIterator::NextFromInput() {
       if (!bottommost_level_) {
         ++iter_stats_.num_optimized_del_drop_obsolete;
       }
-      input_->Next();
+      InputNext();
     } else if ((ikey_.type == kTypeDeletion) && bottommost_level_ &&
                ikeyNotNeededForIncrementalSnapshot()) {
       // Handle the case where we have a delete key at the bottom most level
       // We can skip outputting the key iff there are no subsequent puts for this
       // key
       ParsedInternalKey next_ikey;
-      input_->Next();
+      InputNext();
       // Skip over all versions of this key that happen to occur in the same snapshot
       // range as the delete
       while (input_->Valid() && ParseInternalKey(input_->key(), &next_ikey) &&
              cmp_->Equal(ikey_.user_key, next_ikey.user_key) &&
              (prev_snapshot == 0 ||
               DEFINITELY_NOT_IN_SNAPSHOT(next_ikey.sequence, prev_snapshot))) {
-        input_->Next();
+        InputNext();
       }
       // If you find you still need to output a row with this key, we need to output the
       // delete too
@@ -597,7 +620,7 @@ void CompactionIterator::NextFromInput() {
       if (should_delete) {
         ++iter_stats_.num_record_drop_hidden;
         ++iter_stats_.num_record_drop_range_del;
-        input_->Next();
+        InputNext();
       } else {
         valid_ = true;
       }

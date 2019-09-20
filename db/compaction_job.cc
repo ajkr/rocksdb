@@ -892,7 +892,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       &existing_snapshots_, earliest_write_conflict_snapshot_,
       snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_), false,
       &range_del_agg, sub_compact->compaction, compaction_filter,
-      shutting_down_, preserve_deletes_seqnum_));
+      shutting_down_, preserve_deletes_seqnum_, db_options_.info_log.get()));
   auto c_iter = sub_compact->c_iter.get();
   c_iter->SeekToFirst();
   if (c_iter->Valid() && sub_compact->compaction->output_level() != 0) {
@@ -904,7 +904,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
   const auto& c_iter_stats = c_iter->iter_stats();
 
+  std::string prev_read_key;
   while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
+    if (!c_iter->status().ok()) {
+      ROCKS_LOG_FATAL(db_options_.info_log, "c_iter non-ok: %s", c_iter->status().ToString());
+    }
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
     const Slice& key = c_iter->key();
@@ -933,6 +937,13 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     assert(sub_compact->builder != nullptr);
     assert(sub_compact->current_output() != nullptr);
     sub_compact->builder->Add(key, value);
+    if (!prev_read_key.empty() &&
+        cfd->internal_comparator().Compare(Slice(prev_read_key), key) > 0) {
+      ROCKS_LOG_ERROR(db_options_.info_log, "prev_read_key=%s", Slice(prev_read_key).ToString(true /* hex */).c_str());
+      ROCKS_LOG_ERROR(db_options_.info_log, "key=%s", key.ToString(true /* hex */).c_str());
+      ROCKS_LOG_FATAL(db_options_.info_log, "compaction iter keys out-of-order");
+    }
+    prev_read_key = key.ToString();
     sub_compact->current_output_file_size = sub_compact->builder->FileSize();
     sub_compact->current_output()->meta.UpdateBoundaries(
         key, c_iter->ikey().sequence);
@@ -1029,6 +1040,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       status = s;
     }
     RecordDroppedKeys(range_del_out_stats, &sub_compact->compaction_job_stats);
+  }
+  if (!status.ok()) {
+    ROCKS_LOG_FATAL(db_options_.info_log, "status=%s", status.ToString().c_str());
   }
 
   sub_compact->compaction_job_stats.cpu_micros =
