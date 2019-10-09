@@ -385,6 +385,10 @@ DEFINE_bool(disable_wal, false, "If true, do not write WAL for write.");
 DEFINE_uint64(recycle_log_file_num, rocksdb::Options().recycle_log_file_num,
               "Number of old WAL files to keep around for later recycling");
 
+DEFINE_uint64(delete_obsolete_files_period_micros,
+              rocksdb::Options().delete_obsolete_files_period_micros,
+              "Interval between full purge of obsolete files (microseconds)");
+
 DEFINE_int64(target_file_size_base, rocksdb::Options().target_file_size_base,
              "Target level-1 file size for compaction");
 
@@ -419,6 +423,9 @@ DEFINE_int32(checkpoint_one_in, 0,
              "If non-zero, then CreateCheckpoint() will be called once for "
              "every N operations on average.  0 indicates CreateCheckpoint() "
              "is disabled.");
+
+DEFINE_int32(toggle_file_deletions_one_in, 0,
+             "Number of operations between toggling file deletions on/off.");
 
 DEFINE_int32(ingest_external_file_one_in, 0,
              "If non-zero, then IngestExternalFile() will be called once for "
@@ -1968,6 +1975,7 @@ class StressTest {
     const int delRangeBound = delBound + (int)FLAGS_delrangepercent;
 
     thread->stats.Start();
+    bool file_deletions_enabled = true;
     for (uint64_t i = 0; i < FLAGS_ops_per_thread; i++) {
       if (thread->shared->HasVerificationFailedYet()) {
         break;
@@ -2130,6 +2138,22 @@ class StressTest {
         if (!s.ok()) {
           VerificationAbort(shared, "Checkpoint gave inconsistent state", s);
         }
+      }
+
+      if (FLAGS_toggle_file_deletions_one_in > 0 &&
+          thread->rand.Uniform(FLAGS_toggle_file_deletions_one_in) == 0) {
+        if (file_deletions_enabled) {
+          Status s = db_->DisableFileDeletions();
+          if (!s.ok()) {
+            VerificationAbort(shared, "DisableFileDeletions() failed", s);
+          }
+        } else {
+          Status s = db_->EnableFileDeletions();
+          if (!s.ok()) {
+            VerificationAbort(shared, "EnableFileDeletions() failed", s);
+          }
+        }
+        file_deletions_enabled = !file_deletions_enabled;
       }
 
       if (FLAGS_acquire_snapshot_one_in > 0 &&
@@ -2660,6 +2684,8 @@ class StressTest {
           FLAGS_use_direct_io_for_flush_and_compaction;
       options_.recycle_log_file_num =
           static_cast<size_t>(FLAGS_recycle_log_file_num);
+      options_.delete_obsolete_files_period_micros =
+          FLAGS_delete_obsolete_files_period_micros;
       options_.target_file_size_base = FLAGS_target_file_size_base;
       options_.target_file_size_multiplier = FLAGS_target_file_size_multiplier;
       options_.max_bytes_for_level_base = FLAGS_max_bytes_for_level_base;

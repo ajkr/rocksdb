@@ -350,84 +350,14 @@ class PosixEnv : public Env {
                            std::unique_ptr<WritableFile>* result,
                            const EnvOptions& options) override {
     result->reset();
-    Status s;
-    int fd = -1;
-
-    int flags = 0;
-    // Direct IO mode with O_DIRECT flag or F_NOCAHCE (MAC OSX)
-    if (options.use_direct_writes && !options.use_mmap_writes) {
-#ifdef ROCKSDB_LITE
-      return Status::IOError(fname, "Direct I/O not supported in RocksDB lite");
-#endif  // !ROCKSDB_LITE
-      flags |= O_WRONLY;
-#if !defined(OS_MACOSX) && !defined(OS_OPENBSD) && !defined(OS_SOLARIS)
-      flags |= O_DIRECT;
-#endif
-      TEST_SYNC_POINT_CALLBACK("NewWritableFile:O_DIRECT", &flags);
-    } else if (options.use_mmap_writes) {
-      // mmap needs O_RDWR mode
-      flags |= O_RDWR;
-    } else {
-      flags |= O_WRONLY;
-    }
-
-    flags = cloexec_flags(flags, &options);
-
-    do {
-      IOSTATS_TIMER_GUARD(open_nanos);
-      fd = open(old_fname.c_str(), flags,
-                GetDBFileMode(allow_non_owner_access_));
-    } while (fd < 0 && errno == EINTR);
-    if (fd < 0) {
-      s = IOError("while reopen file for write", fname, errno);
-      return s;
-    }
-
-    SetFD_CLOEXEC(fd, &options);
-    // rename into place
-    if (rename(old_fname.c_str(), fname.c_str()) != 0) {
-      s = IOError("while rename file to " + fname, old_fname, errno);
-      close(fd);
-      return s;
-    }
-
     if (options.use_mmap_writes) {
-      if (!checkedDiskForMmap_) {
-        // this will be executed once in the program's lifetime.
-        // do not use mmapWrite on non ext-3/xfs/tmpfs systems.
-        if (!SupportsFastAllocate(fname)) {
-          forceMmapOff_ = true;
-        }
-        checkedDiskForMmap_ = true;
-      }
+      return rocksdb::Status::InvalidArgument();
     }
-    if (options.use_mmap_writes && !forceMmapOff_) {
-      result->reset(new PosixMmapFile(fname, fd, page_size_, options));
-    } else if (options.use_direct_writes && !options.use_mmap_writes) {
-#ifdef OS_MACOSX
-      if (fcntl(fd, F_NOCACHE, 1) == -1) {
-        close(fd);
-        s = IOError("while fcntl NoCache for reopened file for append", fname,
-                    errno);
-        return s;
-      }
-#elif defined(OS_SOLARIS)
-      if (directio(fd, DIRECTIO_ON) == -1) {
-        if (errno != ENOTTY) { // ZFS filesystems don't support DIRECTIO_ON
-          close(fd);
-          s = IOError("while calling directio()", fname, errno);
-          return s;
-        }
-      }
-#endif
-      result->reset(new PosixWritableFile(fname, fd, options));
-    } else {
-      // disable mmap writes
-      EnvOptions no_mmap_writes_options = options;
-      no_mmap_writes_options.use_mmap_writes = false;
-      result->reset(new PosixWritableFile(fname, fd, no_mmap_writes_options));
+    auto status = NewWritableFile(fname, result, options);
+    if (status.ok()) {
+      status = DeleteFile(old_fname);
     }
-    return s;
+    return status;
   }
 
   Status NewRandomRWFile(const std::string& fname,
