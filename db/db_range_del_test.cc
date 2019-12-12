@@ -391,6 +391,67 @@ TEST_F(DBRangeDelTest, ValidLevelSubcompactionBoundaries) {
   }
 }
 
+TEST_F(DBRangeDelTest, ScanUnderRangeTombstoneSplitBySubcompaction) {
+  // Regression test for an infinite loop trying to scan past a point key under
+  // a subcompaction split point. The first file in the subcompaction right of
+  // the split point must be extended left by a range tombstone in order to
+  // trigger the infinite loop. That is achieved by having range tombstones
+  // cover all keys during the L0->L1 involving subcompactions, so the output
+  // files' boundaries will be determined by the range tombstones.
+  const int kNumPerFile = 100, kNumFiles = 4, kFileBytes = 100 << 10;
+  Options options = CurrentOptions();
+  options.disable_auto_compactions = true;
+  options.level0_file_num_compaction_trigger = kNumFiles;
+  options.max_subcompactions = 4;
+  options.num_levels = 3;
+  options.target_file_size_base = kFileBytes;
+  Reopen(options);
+
+  // Lay out all possible keys in L2. Then one of them will be under the
+  // subcompaction split point, regardless of what key it is.
+  for (int i = 0; i < kNumFiles * kNumPerFile; ++i) {
+    ASSERT_OK(Put(Key(i), "val"));
+  }
+  db_->Flush(FlushOptions());
+  MoveFilesToLevel(2);
+  ASSERT_EQ(NumTableFilesAtLevel(2), 1);
+
+  // Flush four files that get compacted to L1. Their boundaries will be
+  // used as candidates for subcompaction split points.
+  Random rnd(301);
+  for (int i = 0; i < kNumFiles; ++i) {
+    for (int j = 0; j < kNumPerFile; ++j) {
+      ASSERT_OK(Put(Key(i * kNumPerFile + j), RandomString(&rnd, 990)));
+    }
+    db_->Flush(FlushOptions());
+  }
+  MoveFilesToLevel(1);
+  ASSERT_EQ(NumTableFilesAtLevel(1), kNumFiles);
+
+  // Write out some L0 files that will trigger subcompaction to L1. Each one
+  // just contains a range tombstone covering this test's whole keyspace. That
+  // way we ensure they are all compacted together, and range tombstones span
+  // the subcompaction split point, no matter which key is chosen.
+  for (int i = 0; i < kNumPerFile; ++i) {
+    db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(),
+                     Key(0), Key(kNumFiles * kNumPerFile));
+    db_->Flush(FlushOptions());
+  }
+  // Only enable auto-compactions when we're ready; otherwise, the
+  // oversized L0 (relative to base_level) causes the compaction to run
+  // earlier.
+  ASSERT_OK(db_->EnableAutoCompaction({db_->DefaultColumnFamily()}));
+  dbfull()->TEST_WaitForCompact();
+
+  auto* iter = db_->NewIterator(ReadOptions());
+  int found = 0;
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    ++found;
+  }
+  EXPECT_EQ(0, found);
+  delete iter;
+}
+
 TEST_F(DBRangeDelTest, ValidUniversalSubcompactionBoundaries) {
   const int kNumPerFile = 100, kFilesPerLevel = 4, kNumLevels = 4;
   Options options = CurrentOptions();
