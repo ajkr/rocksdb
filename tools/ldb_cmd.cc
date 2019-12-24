@@ -8,6 +8,15 @@
 #include "rocksdb/utilities/ldb_cmd.h"
 
 #include <cinttypes>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 #include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
@@ -23,27 +32,27 @@
 #include "rocksdb/utilities/options_util.h"
 #include "rocksdb/write_batch.h"
 #include "rocksdb/write_buffer_manager.h"
+#include "table/block_based/block_based_table_factory.h"
+#include "table/block_fetcher.h"
+#include "table/meta_blocks.h"
 #include "table/scoped_arena_iterator.h"
+#include "table/sst_file_writer_collectors.h"
+#include "table/table_properties_internal.h"
 #include "tools/ldb_cmd_impl.h"
 #include "tools/sst_dump_tool_imp.h"
 #include "util/cast_util.h"
 #include "util/coding.h"
+#include "util/crc32c.h"
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
+#include "util/xxhash.h"
 #include "utilities/merge_operators.h"
 #include "utilities/ttl/db_ttl_impl.h"
 
-#include <cstdlib>
-#include <ctime>
-#include <fstream>
-#include <functional>
-#include <iostream>
-#include <limits>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-
 namespace rocksdb {
+
+extern const uint64_t kBlockBasedTableMagicNumber,
+    kLegacyBlockBasedTableMagicNumber;
 
 const std::string LDBCommand::ARG_ENV_URI = "env_uri";
 const std::string LDBCommand::ARG_DB = "db";
@@ -3222,6 +3231,216 @@ void IngestExternalSstFilesCommand::DoCommand() {
     return;
   }
   ColumnFamilyHandle* cfh = GetCfHandle();
+
+  std::unique_ptr<RandomAccessFile> file;
+  Status s =
+      options_.env->NewRandomAccessFile(input_sst_path_, &file, EnvOptions());
+  std::unique_ptr<RandomAccessFileReader> file_reader;
+  file_reader.reset(
+      new RandomAccessFileReader(std::move(file), input_sst_path_));
+
+  // Get external file size so we can locate the footer.
+  uint64_t file_size;
+  s = options_.env->GetFileSize(input_sst_path_, &file_size);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+
+  // Read footer so we can locate the meta-index block.
+  Footer footer;
+  s = ReadFooterFromFile(file_reader.get(), nullptr, file_size, &footer,
+                         Footer::kInvalidTableMagicNumber);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+
+  // Read meta-index block so we can locate the properties block.
+  auto metaindex_handle = footer.metaindex_handle();
+  BlockContents metaindex_contents;
+  ReadOptions read_options;
+  read_options.verify_checksums = false;
+  PersistentCacheOptions cache_options;
+  ImmutableCFOptions iopts(options_);
+  BlockFetcher block_fetcher(
+      file_reader.get(), nullptr, footer, read_options, metaindex_handle,
+      &metaindex_contents, iopts, false /* decompress */,
+      false /* maybe_compressed */, BlockType::kMetaIndex,
+      UncompressionDict::GetEmptyDict(), cache_options);
+  s = block_fetcher.ReadBlockContents();
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  Block metaindex_block(std::move(metaindex_contents),
+                        kDisableGlobalSequenceNumber);
+
+  // Read old properties block as our new one will be a superset of it.
+  std::unique_ptr<InternalIterator> meta_iter(metaindex_block.NewDataIterator(
+      BytewiseComparator(), BytewiseComparator()));
+  bool found_properties_block = true;
+  s = SeekToPropertiesBlock(meta_iter.get(), &found_properties_block);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  TableProperties* properties = nullptr;
+  if (found_properties_block) {
+    s = ReadProperties(meta_iter->value(), file_reader.get(), nullptr, footer,
+                       iopts, &properties, false, nullptr, nullptr);
+  } else {
+    s = Status::NotFound();
+  }
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+
+  // Forge a properties block that is the same as the old one but has the
+  // properties added to make it ingestable.
+  PropertyBlockBuilder property_block_builder;
+  std::string seqno_val, version_val;
+  PutFixed64(&seqno_val, 0);
+  PutFixed32(&version_val, 2);
+  properties
+      ->user_collected_properties[ExternalSstFilePropertyNames::kGlobalSeqno] =
+      seqno_val;
+  properties
+      ->user_collected_properties[ExternalSstFilePropertyNames::kVersion] =
+      version_val;
+  property_block_builder.AddTableProperty(*properties);
+  property_block_builder.Add(properties->user_collected_properties);
+  BlockHandle properties_block_handle;
+  Slice new_properties_block_content = property_block_builder.Finish();
+
+  // Append the new properties block and block trailer to the SST file.
+  uint64_t curr_offset = file_size;
+  std::unique_ptr<RandomRWFile> writable_file;
+  s = options_.env->NewRandomRWFile(input_sst_path_, &writable_file,
+                                    EnvOptions());
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  properties_block_handle.set_offset(curr_offset);
+  properties_block_handle.set_size(new_properties_block_content.size());
+  s = writable_file->Write(curr_offset, new_properties_block_content);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  curr_offset += new_properties_block_content.size();
+  char trailer[kBlockTrailerSize];
+  trailer[0] = kNoCompression;
+  char* trailer_without_type = trailer + 1;
+  switch (static_cast<BlockBasedTableFactory*>(iopts.table_factory)
+              ->table_options()
+              .checksum) {
+    case kNoChecksum:
+      EncodeFixed32(trailer_without_type, 0);
+      break;
+    case kCRC32c: {
+      auto crc = crc32c::Value(new_properties_block_content.data(),
+                               new_properties_block_content.size());
+      crc = crc32c::Extend(crc, trailer, 1);
+      EncodeFixed32(trailer_without_type, crc32c::Mask(crc));
+      break;
+    }
+    case kxxHash: {
+      assert(false);
+      break;
+    }
+    case kxxHash64: {
+      assert(false);
+      break;
+    }
+  }
+  s = writable_file->Write(curr_offset, Slice(trailer, kBlockTrailerSize));
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  curr_offset += kBlockTrailerSize;
+
+  // Forge a new meta-index block that is a copy of the old one but points to
+  // the new properties block.
+  MetaIndexBuilder meta_index_builder;
+  meta_iter->SeekToFirst();
+  for (; meta_iter->Valid(); meta_iter->Next()) {
+    std::string meta_block_name(meta_iter->key().ToString());
+    if (meta_block_name == kPropertiesBlock) {
+      meta_index_builder.Add(kPropertiesBlock, properties_block_handle);
+    } else {
+      BlockHandle block_handle;
+      Slice v = meta_iter->value();
+      block_handle.DecodeFrom(&v);
+      meta_index_builder.Add(meta_block_name, block_handle);
+    }
+  }
+  BlockHandle new_meta_index_handle;
+  Slice new_meta_index_block_content = meta_index_builder.Finish();
+  new_meta_index_handle.set_offset(curr_offset);
+  new_meta_index_handle.set_size(new_meta_index_block_content.size());
+
+  // Append the new meta-index block and block trailer to the SST file.
+  s = writable_file->Write(curr_offset, new_meta_index_block_content);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  curr_offset += new_meta_index_block_content.size();
+  char trailer1[kBlockTrailerSize];
+  trailer1[0] = kNoCompression;
+  trailer_without_type = trailer1 + 1;
+  switch (static_cast<BlockBasedTableFactory*>(iopts.table_factory)
+              ->table_options()
+              .checksum) {
+    case kNoChecksum:
+      EncodeFixed32(trailer_without_type, 0);
+      break;
+    case kCRC32c: {
+      auto crc = crc32c::Value(new_meta_index_block_content.data(),
+                               new_meta_index_block_content.size());
+      crc = crc32c::Extend(crc, trailer1, 1);
+      EncodeFixed32(trailer_without_type, crc32c::Mask(crc));
+      break;
+    }
+    case kxxHash: {
+      assert(false);
+      break;
+    }
+    case kxxHash64: {
+      assert(false);
+      break;
+    }
+  }
+  s = writable_file->Write(curr_offset, Slice(trailer1, kBlockTrailerSize));
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+  curr_offset += kBlockTrailerSize;
+
+  // Forge a new footer that is a copy of the old one but points to the new
+  // meta-index block.
+  Footer new_footer(footer.version() == 0 ? kLegacyBlockBasedTableMagicNumber
+                                          : kBlockBasedTableMagicNumber,
+                    footer.version());
+  new_footer.set_metaindex_handle(new_meta_index_handle);
+  new_footer.set_index_handle(footer.index_handle());
+  new_footer.set_checksum(footer.checksum());
+  std::string new_footer_encoding;
+  new_footer.EncodeTo(&new_footer_encoding);
+
+  // Append the new footer to the SST file.
+  s = writable_file->Write(curr_offset, new_footer_encoding);
+  if (!s.ok()) {
+    exec_state_ = LDBCommandExecuteResult::Failed(s.ToString().c_str());
+    return;
+  }
+
+  // Now the SST is ready for ingestion!
   IngestExternalFileOptions ifo;
   ifo.move_files = move_files_;
   ifo.snapshot_consistency = snapshot_consistency_;
@@ -3296,5 +3515,5 @@ void ListFileRangeDeletesCommand::DoCommand() {
   }
 }
 
-}   // namespace rocksdb
+}  // namespace rocksdb
 #endif  // ROCKSDB_LITE
