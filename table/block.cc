@@ -243,15 +243,7 @@ bool BlockIter::ParseNextKey() {
     }
 
     if (global_seqno_ != kDisableGlobalSequenceNumber) {
-      // If we are reading a file with a global sequence number we should
-      // expect that all encoded sequence numbers are zeros and any value
-      // type is kTypeValue, kTypeMerge or kTypeDeletion
-      assert(GetInternalKeySeqno(key_.GetInternalKey()) == 0);
-
       ValueType value_type = ExtractValueType(key_.GetInternalKey());
-      assert(value_type == ValueType::kTypeValue ||
-             value_type == ValueType::kTypeMerge ||
-             value_type == ValueType::kTypeDeletion);
 
       if (key_pinned_) {
         // TODO(tec): Investigate updating the seqno in the loaded block

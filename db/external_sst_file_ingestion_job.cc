@@ -352,18 +352,12 @@ Status ExternalSstFileIngestionJob::GetIngestedFileInfo(
   if (!ParseInternalKey(iter->key(), &key)) {
     return Status::Corruption("external file have corrupted keys");
   }
-  if (key.sequence != 0) {
-    return Status::Corruption("external file have non zero sequence number");
-  }
   file_to_ingest->smallest_user_key = key.user_key.ToString();
 
   // Get last (largest) key from file
   iter->SeekToLast();
   if (!ParseInternalKey(iter->key(), &key)) {
     return Status::Corruption("external file have corrupted keys");
-  }
-  if (key.sequence != 0) {
-    return Status::Corruption("external file have non zero sequence number");
   }
   file_to_ingest->largest_user_key = key.user_key.ToString();
 

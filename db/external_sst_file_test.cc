@@ -1940,6 +1940,59 @@ TEST_F(ExternalSSTFileTest, IngestBehind) {
   size_t kcnt = 0;
   VerifyDBFromMap(true_data, &kcnt, false);
 }
+
+TEST_F(ExternalSSTFileTest, CompactionOutputFilesAreIngestible) {
+  const int kNumKeys = 8 << 10;
+  const int kValueSize = 1 << 10;
+  const int kLevelFiles = 8;
+
+  Options options = CurrentOptions();
+  options.allow_ingest_behind = true;
+  options.compression = kNoCompression;
+  options.level0_file_num_compaction_trigger = kLevelFiles;
+  options.num_levels = 3;
+  options.target_file_size_base = kNumKeys * kValueSize / kLevelFiles;
+  DestroyAndReopen(options);
+
+  Random rnd(301);
+  for (int i = 0; i < kLevelFiles; ++i) {
+    const int kKeysPerFile = kNumKeys / kLevelFiles;
+    for (int j = 0; j < kKeysPerFile; ++j) {
+      std::string v;
+      test::RandomString(&rnd, kValueSize, &v);
+      ASSERT_OK(Put(Key(i * kKeysPerFile + j), v));
+    }
+    // Add a dummy key to ensure overlap to prevent trivial compaction.
+    ASSERT_OK(Put(Key(0), "dummy"));
+    ASSERT_OK(Flush());
+  }
+  dbfull()->TEST_WaitForCompact();
+  ASSERT_EQ(0, NumTableFilesAtLevel(0));
+  ASSERT_GE(NumTableFilesAtLevel(1), kLevelFiles);
+  ASSERT_EQ(0, NumTableFilesAtLevel(2));
+
+  // Just ingest them into the same DB via copying. It's kind of cheating
+  // but for now we're just trying to test ingestion works.
+  std::vector<LiveFileMetaData> metadata;
+  db_->GetLiveFilesMetaData(&metadata);
+  for (const auto& file_meta : metadata) {
+    IngestExternalFileOptions ifo;
+    ifo.allow_global_seqno = true;
+    ifo.ingest_behind = true;
+    ASSERT_OK(db_->IngestExternalFile({dbname_ + "/" + file_meta.name}, ifo));
+  }
+  ASSERT_EQ(NumTableFilesAtLevel(1), NumTableFilesAtLevel(2));
+
+  int total_keys = 0;
+  Iterator* iter = db_->NewIterator(ReadOptions());
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    ASSERT_OK(iter->status());
+    total_keys++;
+  }
+  ASSERT_EQ(kNumKeys, total_keys);
+  delete iter;
+}
+
 }  // namespace rocksdb
 
 int main(int argc, char** argv) {

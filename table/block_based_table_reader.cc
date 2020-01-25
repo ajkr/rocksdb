@@ -497,7 +497,8 @@ SequenceNumber GetGlobalSequenceNumber(const TableProperties& table_properties,
 
   SequenceNumber global_seqno = DecodeFixed64(seqno_pos->second.c_str());
 
-  if (global_seqno > kMaxSequenceNumber) {
+  if (global_seqno > kMaxSequenceNumber &&
+      global_seqno != kDisableGlobalSequenceNumber) {
     assert(false);
     ROCKS_LOG_ERROR(
         info_log,
