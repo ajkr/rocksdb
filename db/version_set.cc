@@ -3216,22 +3216,25 @@ void VersionStorageInfo::CalculateBaseBytes(const ImmutableCFOptions& ioptions,
       }
     }
   } else {
-    uint64_t max_level_size = 0;
-
-    int first_non_empty_level = -1;
+    uint64_t l0_size = 0, max_nonl0_size = 0;
+    base_level_ = num_levels_ - 1;
     // Find size of non-L0 level of most data.
     // Cannot use the size of the last level because it can be empty or less
     // than previous levels after compaction.
-    for (int i = 1; i < num_levels_; i++) {
+    for (int i = 0; i < num_levels_; i++) {
       uint64_t total_size = 0;
       for (const auto& f : files_[i]) {
         total_size += f->fd.GetFileSize();
       }
-      if (total_size > 0 && first_non_empty_level == -1) {
-        first_non_empty_level = i;
-      }
-      if (total_size > max_level_size) {
-        max_level_size = total_size;
+      if (i == 0) {
+        l0_size = total_size;
+      } else {
+        if (total_size > max_nonl0_size) {
+          max_nonl0_size = total_size;
+        }
+        if (total_size > 0 && i < base_level_) {
+          base_level_ = i;
+        }
       }
     }
 
@@ -3240,91 +3243,78 @@ void VersionStorageInfo::CalculateBaseBytes(const ImmutableCFOptions& ioptions,
       level_max_bytes_[i] = std::numeric_limits<uint64_t>::max();
     }
 
-    if (max_level_size == 0) {
-      // No data for L1 and up. L0 compacts to last level directly.
-      // No compaction from L1+ needs to be scheduled.
-      base_level_ = num_levels_ - 1;
+    uint64_t base_bytes_max =
+        std::max(options.max_bytes_for_level_base, l0_size);
+    uint64_t base_bytes_min = static_cast<uint64_t>(
+        base_bytes_max / options.max_bytes_for_level_multiplier);
+
+    // Try whether we can make last level's target size to be max_nonl0_size
+    uint64_t cur_level_size = max_nonl0_size;
+    for (int i = num_levels_ - 2; i >= base_level_; i--) {
+      // Round up after dividing
+      cur_level_size = static_cast<uint64_t>(
+          cur_level_size / options.max_bytes_for_level_multiplier);
+    }
+
+    // Calculate base level and its size.
+    uint64_t base_level_size;
+    if (cur_level_size <= base_bytes_min) {
+      // Case 1. If we make target size of last level to be max_nonl0_size,
+      // target size of the first non-empty level would be smaller than
+      // base_bytes_min. We set it be base_bytes_min.
+      base_level_size = base_bytes_min + 1U;
+      ROCKS_LOG_INFO(ioptions.info_log,
+                     "More existing levels in DB than needed. "
+                     "max_bytes_for_level_multiplier may not be guaranteed.");
     } else {
-      uint64_t l0_size = 0;
-      for (const auto& f : files_[0]) {
-        l0_size += f->fd.GetFileSize();
-      }
-
-      uint64_t base_bytes_max =
-          std::max(options.max_bytes_for_level_base, l0_size);
-      uint64_t base_bytes_min = static_cast<uint64_t>(
-          base_bytes_max / options.max_bytes_for_level_multiplier);
-
-      // Try whether we can make last level's target size to be max_level_size
-      uint64_t cur_level_size = max_level_size;
-      for (int i = num_levels_ - 2; i >= first_non_empty_level; i--) {
-        // Round up after dividing
+      // Find base level (where L0 data is compacted to).
+      while (base_level_ > 1 && cur_level_size > base_bytes_max) {
+        --base_level_;
         cur_level_size = static_cast<uint64_t>(
             cur_level_size / options.max_bytes_for_level_multiplier);
       }
-
-      // Calculate base level and its size.
-      uint64_t base_level_size;
-      if (cur_level_size <= base_bytes_min) {
-        // Case 1. If we make target size of last level to be max_level_size,
-        // target size of the first non-empty level would be smaller than
-        // base_bytes_min. We set it be base_bytes_min.
-        base_level_size = base_bytes_min + 1U;
-        base_level_ = first_non_empty_level;
-        ROCKS_LOG_INFO(ioptions.info_log,
-                       "More existing levels in DB than needed. "
-                       "max_bytes_for_level_multiplier may not be guaranteed.");
+      if (cur_level_size > base_bytes_max) {
+        // Even L1 will be too large
+        assert(base_level_ == 1);
+        base_level_size = base_bytes_max;
       } else {
-        // Find base level (where L0 data is compacted to).
-        base_level_ = first_non_empty_level;
-        while (base_level_ > 1 && cur_level_size > base_bytes_max) {
-          --base_level_;
-          cur_level_size = static_cast<uint64_t>(
-              cur_level_size / options.max_bytes_for_level_multiplier);
-        }
-        if (cur_level_size > base_bytes_max) {
-          // Even L1 will be too large
-          assert(base_level_ == 1);
-          base_level_size = base_bytes_max;
-        } else {
-          base_level_size = cur_level_size;
-        }
+        base_level_size = cur_level_size;
       }
+    }
 
-      level_multiplier_ = options.max_bytes_for_level_multiplier;
-      assert(base_level_size > 0);
-      if (l0_size > base_level_size &&
-          (l0_size > options.max_bytes_for_level_base ||
-           static_cast<int>(files_[0].size() / 2) >=
-               options.level0_file_num_compaction_trigger)) {
-        // We adjust the base level according to actual L0 size, and adjust
-        // the level multiplier accordingly, when:
-        //   1. the L0 size is larger than level size base, or
-        //   2. number of L0 files reaches twice the L0->L1 compaction trigger
-        // We don't do this otherwise to keep the LSM-tree structure stable
-        // unless the L0 compation is backlogged.
-        base_level_size = l0_size;
-        if (base_level_ == num_levels_ - 1) {
-          level_multiplier_ = 1.0;
-        } else {
-          level_multiplier_ = std::pow(
-              static_cast<double>(max_level_size) /
-                  static_cast<double>(base_level_size),
-              1.0 / static_cast<double>(num_levels_ - base_level_ - 1));
-        }
+    level_multiplier_ = options.max_bytes_for_level_multiplier;
+    assert(base_level_size > 0);
+    if (l0_size > base_level_size &&
+        (l0_size > options.max_bytes_for_level_base ||
+         static_cast<int>(files_[0].size() / 2) >=
+             options.level0_file_num_compaction_trigger)) {
+      // We adjust the base level according to actual L0 size, and adjust
+      // the level multiplier accordingly, when:
+      //   1. the L0 size is larger than level size base, or
+      //   2. number of L0 files reaches twice the L0->L1 compaction trigger
+      // We don't do this otherwise to keep the LSM-tree structure stable
+      // unless the L0 compation is backlogged.
+      base_level_size = l0_size;
+      if (base_level_ == num_levels_ - 1) {
+        level_multiplier_ = 1.0;
+      } else {
+        level_multiplier_ = std::pow(
+            static_cast<double>(max_nonl0_size) /
+                static_cast<double>(base_level_size),
+            1.0 / static_cast<double>(num_levels_ - base_level_ - 1));
       }
+    }
 
-      uint64_t level_size = base_level_size;
-      for (int i = base_level_; i < num_levels_; i++) {
-        if (i > base_level_) {
-          level_size = MultiplyCheckOverflow(level_size, level_multiplier_);
-        }
-        // Don't set any level below base_bytes_max. Otherwise, the LSM can
-        // assume an hourglass shape where L1+ sizes are smaller than L0. This
-        // causes compaction scoring, which depends on level sizes, to favor L1+
-        // at the expense of L0, which may fill up and stall.
-        level_max_bytes_[i] = std::max(level_size, base_bytes_max);
+    uint64_t level_size = base_level_size;
+    for (int i = base_level_; i < num_levels_; i++) {
+      if (i > base_level_) {
+        level_size = MultiplyCheckOverflow(level_size, level_multiplier_);
       }
+      // Don't set any level below base_bytes_max. Otherwise, the LSM can
+      // assume an hourglass shape where L1+ sizes are smaller than L0. This
+      // causes compaction scoring, which depends on level sizes, to favor L1+
+      // at the expense of L0, which may fill up and stall.
+      level_max_bytes_[i] = std::max(level_size, base_bytes_max);
     }
   }
 }
