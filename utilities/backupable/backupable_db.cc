@@ -33,9 +33,11 @@
 #include "file/sequence_file_reader.h"
 #include "file/writable_file_writer.h"
 #include "logging/logging.h"
+#include "options/cf_options.h"
 #include "port/port.h"
 #include "rocksdb/rate_limiter.h"
 #include "rocksdb/transaction_log.h"
+#include "table/meta_blocks.h"
 #include "table/sst_file_dumper.h"
 #include "test_util/sync_point.h"
 #include "util/channel.h"
@@ -351,8 +353,9 @@ class BackupEngineImpl : public BackupEngine {
                            uint64_t size_limit, uint32_t* checksum_value);
 
   // Obtain db_id and db_session_id from the table properties of file_path
-  Status GetFileDbIdentities(Env* src_env, const std::string& file_path,
-                             std::string* db_id, std::string* db_session_id);
+  Status GetFileDbIdentities(Env* src_env, const EnvOptions& src_env_options,
+                             const std::string& file_path, std::string* db_id,
+                             std::string* db_session_id);
 
   struct CopyOrCreateResult {
     uint64_t size;
@@ -1442,7 +1445,8 @@ Status BackupEngineImpl::CopyOrCreateFile(
         // SST file
         // Ignore the returned status
         // In the failed cases, db_id and db_session_id will be empty
-        GetFileDbIdentities(src_env, src, db_id, db_session_id);
+        GetFileDbIdentities(src_env, src_env_options, src, db_id,
+                            db_session_id);
       }
     }
   }
@@ -1480,7 +1484,8 @@ Status BackupEngineImpl::AddBackupFileWorkItem(
       // Prepare db_session_id to add to the file name
       // Ignore the returned status
       // In the failed cases, db_id and db_session_id will be empty
-      GetFileDbIdentities(db_env_, src_dir + fname, &db_id, &db_session_id);
+      GetFileDbIdentities(db_env_, src_env_options, src_dir + fname, &db_id,
+                          &db_session_id);
     }
     if (size_bytes == port::kMaxUint64) {
       return Status::NotFound("File missing: " + src_dir + fname);
@@ -1577,7 +1582,8 @@ Status BackupEngineImpl::AddBackupFileWorkItem(
                        "%s checksum checksum calculated, try to obtain DB "
                        "session identity",
                        fname.c_str());
-        GetFileDbIdentities(db_env_, src_dir + fname, &db_id, &db_session_id);
+        GetFileDbIdentities(db_env_, src_env_options, src_dir + fname, &db_id,
+                            &db_session_id);
       }
     }
   }
@@ -1653,6 +1659,7 @@ Status BackupEngineImpl::CalculateChecksum(const std::string& src, Env* src_env,
 }
 
 Status BackupEngineImpl::GetFileDbIdentities(Env* src_env,
+                                             const EnvOptions& src_env_options,
                                              const std::string& file_path,
                                              std::string* db_id,
                                              std::string* db_session_id) {
@@ -1660,38 +1667,40 @@ Status BackupEngineImpl::GetFileDbIdentities(Env* src_env,
   std::string full_path;
   src_env->GetAbsolutePath(file_path, &full_path);
 
-  SstFileDumper sst_reader(Options(), full_path,
-                           2 * 1024 * 1024
-                           /* readahead_size */,
-                           false /* verify_checksum */, false /* output_hex */,
-                           false /* decode_blob_index */, true /* silent */);
-
-  const TableProperties* table_properties = nullptr;
-  std::shared_ptr<const TableProperties> tp;
-  Status s = sst_reader.getStatus();
+  std::unique_ptr<RandomAccessFile> file;
+  std::unique_ptr<RandomAccessFileReader> file_reader;
+  uint64_t file_size = 0;
+  Status s = src_env->GetFileSize(file_path, &file_size);
+  if (s.ok()) {
+    s = src_env->NewRandomAccessFile(file_path, &file, src_env_options);
+  }
+  if (s.ok()) {
+    file_reader.reset(new RandomAccessFileReader(
+        NewLegacyRandomAccessFileWrapper(file), file_path));
+  }
+  TableProperties* table_properties = nullptr;
+  if (s.ok()) {
+    Options options;
+    options.env = src_env;
+    options.info_log.reset(options_.info_log, [](Logger*) {} /* deleter */);
+    ImmutableCFOptions ioptions(options);
+    s = ReadTableProperties(file_reader.get(), file_size,
+                            0 /* table_magic_number */, ioptions,
+                            &table_properties);
+  }
 
   if (s.ok()) {
-    // Try to get table properties from the table reader of sst_reader
-    if (!sst_reader.ReadTableProperties(&tp).ok()) {
-      // Try to use table properites from the initialization of sst_reader
-      table_properties = sst_reader.GetInitTableProperties();
+    if (table_properties != nullptr) {
+      db_id->assign(table_properties->db_id);
+      db_session_id->assign(table_properties->db_session_id);
+      if (db_session_id->empty()) {
+        s = Status::NotFound("DB session identity not found in " + file_path);
+      }
     } else {
-      table_properties = tp.get();
+      s = Status::Corruption("Table properties missing in " + file_path);
     }
-  } else {
-    return s;
   }
-
-  if (table_properties != nullptr) {
-    db_id->assign(table_properties->db_id);
-    db_session_id->assign(table_properties->db_session_id);
-    if (db_session_id->empty()) {
-      return Status::NotFound("DB session identity not found in " + file_path);
-    }
-    return Status::OK();
-  } else {
-    return Status::Corruption("Table properties missing in " + file_path);
-  }
+  return s;
 }
 
 void BackupEngineImpl::DeleteChildren(const std::string& dir,
