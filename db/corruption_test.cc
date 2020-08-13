@@ -69,7 +69,6 @@ class CorruptionTest : public testing::Test {
 
   ~CorruptionTest() override {
     delete db_;
-    db_ = nullptr;
     DestroyDB(dbname_, Options());
   }
 
@@ -573,14 +572,12 @@ TEST_F(CorruptionTest, ParanoidFileChecksOnFlush) {
   Status s;
   for (const auto& mode : corruption_modes) {
     delete db_;
-    db_ = nullptr;
     s = DestroyDB(dbname_, options);
     std::shared_ptr<mock::MockTableFactory> mock =
         std::make_shared<mock::MockTableFactory>();
     options.table_factory = mock;
     mock->SetCorruptionMode(mode);
     ASSERT_OK(DB::Open(options, dbname_, &db_));
-    assert(db_ != nullptr);
     Build(10);
     s = db_->Flush(FlushOptions());
     if (mode == mock::MockTableFactory::kCorruptNone) {
@@ -598,13 +595,11 @@ TEST_F(CorruptionTest, ParanoidFileChecksOnCompact) {
   Status s;
   for (const auto& mode : corruption_modes) {
     delete db_;
-    db_ = nullptr;
     s = DestroyDB(dbname_, options);
     std::shared_ptr<mock::MockTableFactory> mock =
         std::make_shared<mock::MockTableFactory>();
     options.table_factory = mock;
     ASSERT_OK(DB::Open(options, dbname_, &db_));
-    assert(db_ != nullptr);
     Build(100, 2);
     // ASSERT_OK(db_->Flush(FlushOptions()));
     DBImpl* dbi = static_cast_with_check<DBImpl>(db_);

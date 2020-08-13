@@ -891,7 +891,7 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
         continue;
       }
       WriteBatchInternal::SetContents(&batch, record);
-      SequenceNumber sequence = WriteBatchInternal::Sequence(&batch);
+      //SequenceNumber sequence = WriteBatchInternal::Sequence(&batch);
 
       if (immutable_db_options_.wal_recovery_mode ==
           WALRecoveryMode::kPointInTimeRecovery) {
@@ -899,9 +899,9 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
         // consecutive, we continue recovery despite corruption. This could
         // happen when we open and write to a corrupted DB, where sequence id
         // will start from the last sequence id we recovered.
-        if (sequence == *next_sequence) {
-          stop_replay_for_corruption = false;
-        }
+        //if (sequence == *next_sequence) {
+          //stop_replay_for_corruption = false;
+        //}
         if (stop_replay_for_corruption) {
           logFileDropped();
           break;

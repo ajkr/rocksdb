@@ -60,10 +60,8 @@ if [ -z "$ROCKSDB_NO_FBCODE" -a -d /mnt/gvfs/third-party ]; then
       source "$PWD/build_tools/fbcode_config4.8.1.sh"
     elif [ -n "$ROCKSDB_FBCODE_BUILD_WITH_5xx" ]; then
       source "$PWD/build_tools/fbcode_config.sh"
-    elif [ -n "$ROCKSDB_FBCODE_BUILD_WITH_PLATFORM007" ]; then
-      source "$PWD/build_tools/fbcode_config_platform007.sh"
     else
-      source "$PWD/build_tools/fbcode_config_platform009.sh"
+      source "$PWD/build_tools/fbcode_config_platform007.sh"
     fi
 fi
 
