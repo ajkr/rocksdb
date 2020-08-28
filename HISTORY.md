@@ -1,5 +1,7 @@
 # Rocksdb Change Log
 ## Unreleased
+### Performance Improvements
+* Reduce write-amp in heavy write bursts in `kCompactionStyleLevel` compaction style with `level_compaction_dynamic_level_bytes` set.
 
 ## 6.12.1 (2020-08-20)
 ### Bug fixes
