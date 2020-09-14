@@ -248,7 +248,10 @@ class SpecialEnv : public EnvWrapper {
       }
       Status Truncate(uint64_t size) override { return base_->Truncate(size); }
       Status RangeSync(uint64_t offset, uint64_t nbytes) override {
-        Status s = base_->RangeSync(offset, nbytes);
+        Status s;
+        if (!env_->skip_fsync_) {
+          s = base_->RangeSync(offset, nbytes);
+        }
 #if !(defined NDEBUG) || !defined(OS_WIN)
         TEST_SYNC_POINT_CALLBACK("SpecialEnv::SStableFile::RangeSync", &s);
 #endif  // !(defined NDEBUG) || !defined(OS_WIN)
@@ -323,6 +326,13 @@ class SpecialEnv : public EnvWrapper {
           }
         }
       }
+      Status RangeSync(uint64_t offset, uint64_t nbytes) override {
+        Status s;
+        if (!env_->skip_fsync_) {
+          s = base_->RangeSync(offset, nbytes);
+        }
+        return s;
+      }
       uint64_t GetFileSize() override { return base_->GetFileSize(); }
       Status Allocate(uint64_t offset, uint64_t len) override {
         return base_->Allocate(offset, len);
@@ -381,6 +391,13 @@ class SpecialEnv : public EnvWrapper {
           return base_->Sync();
         }
       }
+      Status RangeSync(uint64_t offset, uint64_t nbytes) override {
+        Status s;
+        if (!env_->skip_fsync_) {
+          s = base_->RangeSync(offset, nbytes);
+        }
+        return s;
+      }
       bool IsSyncThreadSafe() const override {
         return env_->is_wal_sync_thread_safe_.load();
       }
@@ -406,6 +423,13 @@ class SpecialEnv : public EnvWrapper {
         } else {
           return base_->Sync();
         }
+      }
+      Status RangeSync(uint64_t offset, uint64_t nbytes) override {
+        Status s;
+        if (!env_->skip_fsync_) {
+          s = base_->RangeSync(offset, nbytes);
+        }
+        return s;
       }
       uint64_t GetFileSize() override { return base_->GetFileSize(); }
       Status Allocate(uint64_t offset, uint64_t len) override {
