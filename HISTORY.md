@@ -1,4 +1,8 @@
 # Rocksdb Change Log
+## Unreleased
+### Public API Change
+* Add an option, `CompressionOptions::max_dict_buffer_bytes`, to limit the in-memory buffering for selecting samples for generating/training a dictionary. The limit is currently loosely adhered to.
+
 ## 6.17.3 (02/18/2021)
 ### Bug Fixes
 * Fix `WRITE_PREPARED`, `WRITE_UNPREPARED` TransactionDB `MultiGet()` may return uncommitted data with snapshot.
