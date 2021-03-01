@@ -2402,6 +2402,85 @@ class Duration {
   uint64_t start_at_;
 };
 
+namespace {
+
+class TimestampRangeTablePropertiesCollector : public TablePropertiesCollector {
+ public:
+  static const std::string kMinTimestampProperty;
+  static const std::string kMaxTimestampProperty;
+
+  TimestampRangeTablePropertiesCollector(const Comparator* ucmp)
+      : ucmp_(ucmp) {}
+
+  Status AddUserKey(const Slice& key, const Slice& /* value */,
+                    EntryType /*type*/, SequenceNumber /*seq*/,
+                    uint64_t /*file_size*/) override {
+    size_t ts_sz = ucmp_->timestamp_size();
+    Slice key_ts = Slice(key.data() + key.size() - ts_sz, ts_sz);
+    if (min_timestamp_.empty() ||
+        ucmp_->CompareTimestamp(key_ts, min_timestamp_) < 0) {
+      min_timestamp_ = key_ts.ToString();
+    }
+    if (max_timestamp_.empty() ||
+        ucmp_->CompareTimestamp(max_timestamp_, key_ts) < 0) {
+      max_timestamp_ = key_ts.ToString();
+    }
+    return Status::OK();
+  }
+
+  Status Finish(UserCollectedProperties* properties) override {
+    (*properties)[kMinTimestampProperty] = min_timestamp_;
+    (*properties)[kMaxTimestampProperty] = max_timestamp_;
+    return Status::OK();
+  }
+
+  UserCollectedProperties GetReadableProperties() const override {
+    return UserCollectedProperties{
+        {kMinTimestampProperty, Slice(min_timestamp_).ToString(true /* hex */)},
+        {kMaxTimestampProperty, Slice(max_timestamp_).ToString(true /* hex */)},
+    };
+  }
+
+  const char* Name() const override {
+    return "TimestampRangeTablePropertiesCollector";
+  }
+
+ private:
+  const Comparator* const ucmp_;
+  std::string min_timestamp_;
+  std::string max_timestamp_;
+};
+
+const std::string
+    TimestampRangeTablePropertiesCollector::kMinTimestampProperty =
+        "min_timestamp";
+const std::string
+    TimestampRangeTablePropertiesCollector::kMaxTimestampProperty =
+        "max_timestamp";
+
+class TimestampRangeTablePropertiesCollectorFactory
+    : public TablePropertiesCollectorFactory {
+ public:
+  TimestampRangeTablePropertiesCollectorFactory(const Comparator* ucmp)
+      : ucmp_(ucmp) {}
+
+  TablePropertiesCollector* CreateTablePropertiesCollector(
+      TablePropertiesCollectorFactory::Context /* context */) override {
+    return new TimestampRangeTablePropertiesCollector(ucmp_);
+  }
+
+  const char* Name() const override {
+    return "TimestampRangeTablePropertiesCollectorFactory";
+  }
+
+  std::string ToString() const override { return Name(); }
+
+ private:
+  const Comparator* const ucmp_;
+};
+
+}  // anonymous namespace
+
 class Benchmark {
  private:
   std::shared_ptr<Cache> cache_;
@@ -4110,14 +4189,6 @@ class Benchmark {
       options.enable_thread_tracking = true;
     }
 
-    if (FLAGS_user_timestamp_size > 0) {
-      if (FLAGS_user_timestamp_size != 8) {
-        fprintf(stderr, "Only 64 bits timestamps are supported.\n");
-        exit(1);
-      }
-      options.comparator = ROCKSDB_NAMESPACE::test::ComparatorWithU64Ts();
-    }
-
     // Integrated BlobDB
     options.enable_blob_files = FLAGS_enable_blob_files;
     options.min_blob_size = FLAGS_min_blob_size;
@@ -4158,6 +4229,17 @@ class Benchmark {
     options.persist_stats_to_disk = FLAGS_persist_stats_to_disk;
     options.stats_history_buffer_size =
         static_cast<size_t>(FLAGS_stats_history_buffer_size);
+
+    if (FLAGS_user_timestamp_size > 0) {
+      if (FLAGS_user_timestamp_size != 8) {
+        fprintf(stderr, "Only 64 bits timestamps are supported.\n");
+        exit(1);
+      }
+      options.comparator = ROCKSDB_NAMESPACE::test::ComparatorWithU64Ts();
+      options.table_properties_collector_factories.emplace_back(
+          new TimestampRangeTablePropertiesCollectorFactory(
+              options.comparator));
+    }
 
     options.compression_opts.level = FLAGS_compression_level;
     options.compression_opts.max_dict_bytes = FLAGS_compression_max_dict_bytes;
@@ -5945,6 +6027,25 @@ class Benchmark {
       ts_guard.reset(new char[user_timestamp_size_]);
       ts = mock_app_clock_->GetTimestampForRead(thread->rand, ts_guard.get());
       options.timestamp = &ts;
+      if (use_timestamp_hash_as_key_) {
+        options.table_filter = [&ts,
+                                &options](const TableProperties& tp) -> bool {
+          if (ROCKSDB_NAMESPACE::test::ComparatorWithU64Ts()->CompareTimestamp(
+                  ts, tp.user_collected_properties.at(
+                          TimestampRangeTablePropertiesCollector::
+                               kMinTimestampProperty)) < 0) {
+            return false;
+          }
+          if (ROCKSDB_NAMESPACE::test::ComparatorWithU64Ts()->CompareTimestamp(
+                  tp.user_collected_properties.at(
+                      TimestampRangeTablePropertiesCollector::
+                           kMaxTimestampProperty),
+                  ts) < 0) {
+            return false;
+          }
+          return true;
+        };
+      }
     }
 
     Iterator* single_iter = nullptr;
