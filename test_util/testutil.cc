@@ -118,7 +118,24 @@ class ComparatorWithU64TsImpl : public Comparator {
   }
   const char* Name() const override { return "ComparatorWithU64Ts"; }
   void FindShortSuccessor(std::string*) const override {}
-  void FindShortestSeparator(std::string*, const Slice&) const override {}
+
+  void FindShortestSeparator(std::string* start,
+                             const Slice& limit) const override {
+    size_t ts_sz = timestamp_size();
+    uint64_t start_timestamp =
+        DecodeFixed64(ExtractTimestampFromUserKey(*start, ts_sz).data());
+    start->resize(start->size() - ts_sz);
+    cmp_without_ts_->FindShortestSeparator(start,
+                                           StripTimestampFromUserKey(limit, ts_sz));
+    // Add back a timestamp since it will be used when reading the index.
+    // `start`'s original timestamp should be safe in terms of producing a
+    // separator key within the original bounds `[start, limit)`.
+    assert(ts_sz == 8);
+    char start_timestamp_buf[8];
+    EncodeFixed64(&start_timestamp_buf[0], start_timestamp);
+    start->append(&start_timestamp_buf[0], 8);
+  }
+
   int Compare(const Slice& a, const Slice& b) const override {
     int ret = CompareWithoutTimestamp(a, b);
     size_t ts_sz = timestamp_size();
