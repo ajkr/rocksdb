@@ -6017,6 +6017,7 @@ class Benchmark {
     int64_t found = 0;
     int64_t bytes = 0;
     ReadOptions options(FLAGS_verify_checksum, true);
+    options.ignore_range_deletions = true;
     options.total_order_seek = FLAGS_total_order_seek;
     options.prefix_same_as_start = FLAGS_prefix_same_as_start;
     options.tailing = FLAGS_use_tailing_iterator;
