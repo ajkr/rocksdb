@@ -2542,9 +2542,14 @@ class Benchmark {
     }
 
     bool WaitForRecovery(uint64_t abs_time_us) {
+      uint64_t deadline_us = Env::Default()->NowMicros() + abs_time_us;
       InstrumentedMutexLock l(&mutex_);
-      if (!recovery_complete_) {
-        cv_.TimedWait(abs_time_us);
+      while (!recovery_complete_) {
+        uint64_t now_us = Env::Default()->NowMicros();
+        if (deadline_us <= now_us) {
+          break;
+        }
+        cv_.TimedWait(deadline_us - now_us);
       }
       if (recovery_complete_) {
         recovery_complete_ = false;
