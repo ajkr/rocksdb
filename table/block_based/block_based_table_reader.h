@@ -168,6 +168,8 @@ class BlockBasedTable : public TableReader {
 
   std::shared_ptr<const TableProperties> GetTableProperties() const override;
 
+  const TableProperties* GetTablePropertiesPtr() const override;
+
   size_t ApproximateMemoryUsage() const override;
 
   // convert SST file to a human readable form

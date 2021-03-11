@@ -239,7 +239,7 @@ InternalIterator* TableCache::NewIterator(
   InternalIterator* result = nullptr;
   if (s.ok()) {
     if (options.table_filter &&
-        !options.table_filter(*table_reader->GetTableProperties())) {
+        !options.table_filter(*table_reader->GetTablePropertiesPtr())) {
       result = NewEmptyInternalIterator<Slice>(arena);
     } else {
       result = table_reader->NewIterator(options, prefix_extractor, arena,

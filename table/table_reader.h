@@ -88,6 +88,11 @@ class TableReader {
 
   virtual std::shared_ptr<const TableProperties> GetTableProperties() const = 0;
 
+  // This function can be used to save `shared_ptr` copies compared to
+  // `GetTableProperties()` when we know the returned pointer will not be
+  // accessed beyond this `TableReader`'s lifetime.
+  virtual const TableProperties* GetTablePropertiesPtr() const = 0;
+
   // Prepare work that can be done before the real Get()
   virtual void Prepare(const Slice& /*target*/) {}
 

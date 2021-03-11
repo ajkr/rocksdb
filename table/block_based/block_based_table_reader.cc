@@ -1117,6 +1117,10 @@ std::shared_ptr<const TableProperties> BlockBasedTable::GetTableProperties()
   return rep_->table_properties;
 }
 
+const TableProperties* BlockBasedTable::GetTablePropertiesPtr() const {
+  return rep_->table_properties.get();
+}
+
 size_t BlockBasedTable::ApproximateMemoryUsage() const {
   size_t usage = 0;
   if (rep_->filter) {
