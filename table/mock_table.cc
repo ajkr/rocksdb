@@ -28,7 +28,8 @@ void SortKVVector(KVVector* kv_vector, const Comparator* ucmp) {
 
 class MockTableReader : public TableReader {
  public:
-  explicit MockTableReader(const KVVector& table) : table_(table) {}
+  explicit MockTableReader(const KVVector& table)
+      : table_(table), table_props_(std::make_shared<TableProperties>()) {}
 
   InternalIterator* NewIterator(const ReadOptions&,
                                 const SliceTransform* prefix_extractor,
@@ -57,10 +58,13 @@ class MockTableReader : public TableReader {
 
   std::shared_ptr<const TableProperties> GetTableProperties() const override;
 
+  const TableProperties* GetTablePropertiesPtr() const override;
+
   ~MockTableReader() {}
 
  private:
   const KVVector& table_;
+  std::shared_ptr<TableProperties> table_props_;
 };
 
 class MockTableIterator : public InternalIterator {
@@ -223,7 +227,11 @@ Status MockTableReader::Get(const ReadOptions&, const Slice& key,
 
 std::shared_ptr<const TableProperties> MockTableReader::GetTableProperties()
     const {
-  return std::shared_ptr<const TableProperties>(new TableProperties());
+  return table_props_;
+}
+
+const TableProperties* MockTableReader::GetTablePropertiesPtr() const {
+  return table_props_.get();
 }
 
 MockTableFactory::MockTableFactory()

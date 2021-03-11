@@ -39,6 +39,10 @@ class CuckooTableReader: public TableReader {
     return table_props_;
   }
 
+  const TableProperties* GetTablePropertiesPtr() const override {
+    return table_props_.get();
+  }
+
   Status status() const { return status_; }
 
   Status Get(const ReadOptions& readOptions, const Slice& key,
