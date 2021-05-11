@@ -434,7 +434,7 @@ class CompactionRangeDelAggregator : public RangeDelAggregator {
   // enforced during iteration.
   std::unique_ptr<FragmentedRangeTombstoneIterator> NewIterator(
       const Slice* lower_bound = nullptr, const Slice* upper_bound = nullptr,
-      bool upper_bound_inclusive = false, uint64_t* num_tombstones = nullptr);
+      bool upper_bound_inclusive = false);
 
  private:
   std::vector<std::unique_ptr<TruncatedRangeDelIterator>> parent_iters_;

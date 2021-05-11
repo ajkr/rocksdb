@@ -88,7 +88,10 @@ Status BuildTable(
   std::unique_ptr<CompactionRangeDelAggregator> range_del_agg(
       new CompactionRangeDelAggregator(&tboptions.internal_comparator,
                                        snapshots));
+  uint64_t num_unfragmented_tombstones = 0;
   for (auto& range_del_iter : range_del_iters) {
+    num_unfragmented_tombstones +=
+        range_del_iter->num_unfragmented_tombstones();
     range_del_agg->AddTombstones(std::move(range_del_iter));
   }
 
@@ -216,10 +219,8 @@ Status BuildTable(
       s = c_iter.status();
     }
 
-    uint64_t num_range_tombstones = 0;
     if (s.ok()) {
-      auto range_del_it = range_del_agg->NewIterator(nullptr, nullptr, false,
-                                                     &num_range_tombstones);
+      auto range_del_it = range_del_agg->NewIterator(nullptr, nullptr, false);
       for (range_del_it->SeekToFirst(); range_del_it->Valid();
            range_del_it->Next()) {
         auto tombstone = range_del_it->Tombstone();
@@ -235,7 +236,7 @@ Status BuildTable(
     const bool empty = builder->IsEmpty();
     if (num_input_entries != nullptr) {
       *num_input_entries =
-          c_iter.num_input_entry_scanned() + num_range_tombstones;
+          c_iter.num_input_entry_scanned() + num_unfragmented_tombstones;
     }
     if (!s.ok() || empty) {
       builder->Abandon();
