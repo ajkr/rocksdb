@@ -116,6 +116,7 @@ Status MergeHelper::TimedFullMerge(const MergeOperator* merge_operator,
 // TODO: Avoid the snapshot stripe map lookup in CompactionRangeDelAggregator
 // and just pass the StripeRep corresponding to the stripe being merged.
 Status MergeHelper::MergeUntil(InternalIterator* iter,
+                               std::function<void()> iter_next_callback,
                                CompactionRangeDelAggregator* range_del_agg,
                                const SequenceNumber stop_before,
                                const bool at_bottom,
@@ -147,7 +148,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
   if (!s.ok()) return s;
 
   bool hit_the_next_user_key = false;
-  for (; iter->Valid(); iter->Next(), original_key_is_iter = false) {
+  for (; iter->Valid(); iter_next_callback(), original_key_is_iter = false) {
     if (IsShuttingDown()) {
       s = Status::ShutdownInProgress();
       return s;
@@ -231,7 +232,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
       }
 
       // move iter to the next entry
-      iter->Next();
+      iter_next_callback();
       return s;
     } else {
       // hit a merge

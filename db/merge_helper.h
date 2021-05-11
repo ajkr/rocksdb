@@ -62,6 +62,9 @@ class MergeHelper {
   //  or - the end of iteration
   // iter: (IN)  points to the first merge type entry
   //       (OUT) points to the first entry not included in the merge process
+  // iter_next_callback: (IN) call when advancing iter is needed. This will
+  //                          be called instead of iter->Next() for recording
+  //                          counters needed.
   // range_del_agg: (IN) filters merge operands covered by range tombstones.
   // stop_before: (IN) a sequence number that merge should not cross.
   //                   0 means no restriction
@@ -81,6 +84,7 @@ class MergeHelper {
   //
   // REQUIRED: The first key in the input is not corrupted.
   Status MergeUntil(InternalIterator* iter,
+                    std::function<void()> iter_next_callback,
                     CompactionRangeDelAggregator* range_del_agg = nullptr,
                     const SequenceNumber stop_before = 0,
                     const bool at_bottom = false,

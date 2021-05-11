@@ -68,6 +68,8 @@ struct FragmentedRangeTombstoneList {
   // number in [lower, upper].
   bool ContainsRange(SequenceNumber lower, SequenceNumber upper) const;
 
+  uint64_t num_tombstones() const { return num_tombstones_; }
+
  private:
   // Given an ordered range tombstone iterator unfragmented_tombstones,
   // "fragment" the tombstones into non-overlapping pieces, and store them in
@@ -82,6 +84,7 @@ struct FragmentedRangeTombstoneList {
   std::set<SequenceNumber> seq_set_;
   std::list<std::string> pinned_slices_;
   PinnedIteratorsManager pinned_iters_mgr_;
+  uint64_t num_tombstones_;
 };
 
 // FragmentedRangeTombstoneIterator converts an InternalIterator of a range-del

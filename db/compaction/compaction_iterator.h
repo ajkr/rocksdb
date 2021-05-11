@@ -162,6 +162,7 @@ class CompactionIterator {
   bool Valid() const { return valid_; }
   const Slice& user_key() const { return current_user_key_; }
   const CompactionIterationStats& iter_stats() const { return iter_stats_; }
+  uint64_t num_input_entry_scanned() const { return num_input_entry_scanned_; }
 
  private:
   // Processes the input stream to find the next output
@@ -340,7 +341,26 @@ class CompactionIterator {
   // Saved result of ucmp->CompareTimestamp(current_ts_, *full_history_ts_low_)
   int cmp_with_history_ts_low_;
 
+  uint64_t num_input_entry_scanned_ = 0;
+
   const int level_;
+
+  void AdvanceInputIter() {
+    num_input_entry_scanned_++;
+    input_->Next();
+  }
+
+  void SkipUntil(const Slice& skip_until) {
+    if (compaction_) {
+      input_->Seek(skip_until);
+    } else {
+      // For flush cases, we need to count total number of entries, so we
+      // do Next() rather than Seek().
+      while (input_->Valid() && cmp_->Compare(input_->key(), skip_until) < 0) {
+        AdvanceInputIter();
+      }
+    }
+  }
 
   bool IsShuttingDown() {
     // This is a best-effort facility, so memory_order_relaxed is sufficient.

@@ -469,7 +469,8 @@ class TruncatedRangeDelMergingIter : public InternalIterator {
 std::unique_ptr<FragmentedRangeTombstoneIterator>
 CompactionRangeDelAggregator::NewIterator(const Slice* lower_bound,
                                           const Slice* upper_bound,
-                                          bool upper_bound_inclusive) {
+                                          bool upper_bound_inclusive,
+                                          uint64_t* num_tombstones) {
   InvalidateRangeDelMapPositions();
   std::unique_ptr<TruncatedRangeDelMergingIter> merging_iter(
       new TruncatedRangeDelMergingIter(icmp_, lower_bound, upper_bound,
@@ -479,6 +480,9 @@ CompactionRangeDelAggregator::NewIterator(const Slice* lower_bound,
       std::make_shared<FragmentedRangeTombstoneList>(
           std::move(merging_iter), *icmp_, true /* for_compaction */,
           *snapshots_);
+  if (num_tombstones != nullptr && fragmented_tombstone_list) {
+    *num_tombstones = fragmented_tombstone_list->num_tombstones();
+  }
 
   return std::unique_ptr<FragmentedRangeTombstoneIterator>(
       new FragmentedRangeTombstoneIterator(
